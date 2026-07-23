@@ -65,7 +65,7 @@ Grok supports three API backends. Set `api_backend` in your `[model.*]` config t
 
 When you omit `api_backend`, Grok uses `chat_completions`.
 
-To send provider-specific authentication or version headers -- for example, Anthropic's `x-api-key` -- use the `extra_headers` field described below. Grok sends those headers verbatim with every request to the endpoint.
+To send provider-specific non-secret headers -- for example, Anthropic's `anthropic-version` -- use the `extra_headers` field described below. Grok sends those headers verbatim with every request to the endpoint. Prefer `auth_scheme` and `env_key` / `api_key` for credentials rather than putting secrets in `extra_headers`.
 
 ---
 
@@ -79,19 +79,30 @@ model = "model-id"                        # Model identifier sent to the API
 base_url = "https://api.example.com/v1"   # OpenAI-compatible endpoint
 name = "Display Name"                     # Shown in the model picker
 description = "Model description"          # Optional description
-api_key = "sk-..."                        # API key for this provider (optional)
-env_key = "XAI_API_KEY"                   # Env var holding the API key (optional; string or array)
+api_key = "..."                           # API key for this provider (optional)
+env_key = "PROVIDER_API_KEY"              # Env var holding the API key (optional; string or array)
+auth_scheme = "bearer"                    # "bearer" (default), "x_api_key", or "none"
 api_backend = "chat_completions"          # "chat_completions", "responses", or "messages"
 temperature = 0.7                         # Sampling temperature
 top_p = 0.95                              # Nucleus sampling parameter
 max_completion_tokens = 8192              # Maximum tokens per response
 context_window = 128000                   # Total context window in tokens
-extra_headers = { "x-api-key" = "sk-..." } # Extra request headers, sent verbatim (optional)
+extra_headers = { "X-Request-Tags" = "team=example" }  # Extra request headers, sent verbatim (optional)
 ```
+
+### Field reference: `auth_scheme`
+
+| Value | Behavior |
+|-------|----------|
+| `"bearer"` | Default. Sends `Authorization: Bearer <key>` from `api_key` / `env_key` / session / ambient fallback. |
+| `"x_api_key"` | Sends `x-api-key: <key>` (Anthropic-style) instead of Bearer. Use with `env_key` or `api_key`. |
+| `"none"` | Sends **no** auth header. Required for keyless local servers so ambient xAI credentials are not attached. |
+
+When `auth_scheme` is omitted, Grok uses `"bearer"`.
 
 ### Credential Resolution
 
-Grok resolves the API key in this order:
+Grok resolves the API key in this order (skipped entirely when `auth_scheme = "none"`):
 
 1. The `api_key` field in the model config
 2. The environment variable(s) named by `env_key` — a single string or an array of names. The first set, non-empty value wins (for example `env_key = ["ANTHROPIC_AUTH_TOKEN", "LC_ANTHROPIC_AUTH_TOKEN"]` for SSH `LC_*` forwarding)
@@ -145,7 +156,7 @@ api_key = "my-api-key"
 # Override temperature and add a custom API key
 [model.grok-build]
 temperature = 0.5
-api_key = "sk-custom"
+api_key = "my-custom-key"
 ```
 
 When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default.
@@ -170,11 +181,13 @@ model = "claude-opus-4-6"
 base_url = "https://api.anthropic.com/v1"
 name = "Claude Opus 4.6"
 api_backend = "messages"
+auth_scheme = "x_api_key"
+env_key = "ANTHROPIC_API_KEY"
+extra_headers = { "anthropic-version" = "2023-06-01" }
 context_window = 200000
-extra_headers = { "x-api-key" = "sk-ant-...", "anthropic-version" = "2023-06-01" }
 ```
 
-The `messages` backend uses the Anthropic Messages protocol. Anthropic authenticates with an `x-api-key` header rather than `Authorization: Bearer`, so pass your key through `extra_headers`, which Grok sends verbatim.
+The `messages` backend uses the Anthropic Messages protocol. Set `auth_scheme = "x_api_key"` so Grok sends the resolved key as `x-api-key` rather than `Authorization: Bearer`. Keep non-secret version headers in `extra_headers`; do not put the API key there.
 
 ### OpenAI (Chat Completions)
 
@@ -186,7 +199,7 @@ name = "GPT-4o"
 env_key = "OPENAI_API_KEY"
 ```
 
-`api_backend` defaults to `"chat_completions"`, so you don't need to set it explicitly for OpenAI.
+`api_backend` defaults to `"chat_completions"` and `auth_scheme` defaults to `"bearer"`, so you don't need to set either explicitly for OpenAI.
 
 ### OpenAI (Responses API)
 
@@ -201,18 +214,30 @@ api_backend = "responses"
 env_key = "OPENAI_API_KEY"
 ```
 
-### Ollama (Local Models)
+### Gemini (OpenAI-compatible)
 
-Run models locally with [Ollama](https://ollama.ai):
+Google's OpenAI-compatible endpoint uses Bearer auth:
 
 ```toml
-[model.ollama-codellama]
-model = "codellama"
-base_url = "http://localhost:11434/v1"
-name = "CodeLlama (Ollama)"
+[model.gemini-flash]
+model = "gemini-2.0-flash"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+name = "Gemini 2.0 Flash"
+env_key = "GEMINI_API_KEY"
 ```
 
-Make sure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull codellama`).
+### OpenRouter
+
+```toml
+[model.openrouter-llama]
+model = "meta-llama/llama-3.3-70b-instruct"
+base_url = "https://openrouter.ai/api/v1"
+name = "Llama 3.3 70B (OpenRouter)"
+env_key = "OPENROUTER_API_KEY"
+extra_headers = { "HTTP-Referer" = "https://example.com", "X-Title" = "My App" }
+```
+
+Optional attribution headers (`HTTP-Referer`, `X-Title`) are non-secret; put the key in `env_key`, not in `extra_headers`.
 
 ### Together AI
 
@@ -224,16 +249,68 @@ name = "Mixtral 8x7B"
 env_key = "TOGETHER_API_KEY"
 ```
 
-### Local OpenAI-Compatible Server
+### Generic hosted OpenAI-compatible
 
-Any server that implements the OpenAI Chat Completions or Responses API:
+Any hosted OpenAI-compatible Chat Completions endpoint:
 
 ```toml
-[model.local-llama]
-model = "llama-3.1-70b"
+[model.hosted-custom]
+model = "provider-model-id"
+base_url = "https://api.example.com/v1"
+name = "Hosted Custom"
+env_key = "PROVIDER_API_KEY"
+```
+
+### Local models (`auth_scheme = "none"`)
+
+Keyless local servers need an explicit `auth_scheme = "none"`. Without it, Grok may still inherit ambient xAI credentials (session token or `XAI_API_KEY`) and attach a Bearer header the local server does not expect.
+
+Tools, reasoning, images, and structured output depend on what the local server and model support; Grok does not invent capabilities the backend lacks.
+
+#### Ollama
+
+```toml
+[model.ollama-codellama]
+model = "codellama"
+base_url = "http://localhost:11434/v1"
+name = "CodeLlama (Ollama)"
+auth_scheme = "none"
+context_window = 16384
+```
+
+Make sure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull codellama`).
+
+#### LM Studio
+
+```toml
+[model.lmstudio-local]
+model = "local-model"
+base_url = "http://localhost:1234/v1"
+name = "LM Studio"
+auth_scheme = "none"
+context_window = 32768
+```
+
+#### llama.cpp
+
+```toml
+[model.llamacpp]
+model = "local-model"
 base_url = "http://localhost:8080/v1"
-name = "Local Llama"
-temperature = 0.8
+name = "llama.cpp"
+auth_scheme = "none"
+context_window = 8192
+```
+
+#### vLLM
+
+```toml
+[model.vllm-local]
+model = "meta-llama/Llama-3.1-8B-Instruct"
+base_url = "http://localhost:8000/v1"
+name = "vLLM"
+auth_scheme = "none"
+context_window = 128000
 ```
 
 ---
@@ -254,7 +331,7 @@ Point Grok at a custom OpenAI-compatible `/v1/models` endpoint instead of the de
 
 ```bash
 export GROK_MODELS_BASE_URL="https://api.acme.com/v1"
-export XAI_API_KEY="xai-..."
+export XAI_API_KEY="your-api-key"
 grok
 ```
 
