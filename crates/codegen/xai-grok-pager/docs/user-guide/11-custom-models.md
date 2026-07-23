@@ -42,6 +42,8 @@ Or use the alias:
 
 Press `Ctrl+M` from the scrollback pane to open the model picker. It lists all available models, both built-in and custom, and lets you switch with a single keystroke. With the prompt focused, `Ctrl+M` toggles multiline input instead -- use `/model` to switch without leaving the prompt.
 
+Each row shows a short provider hint and a readiness badge (`ready`, `missing`, or `local`). Models that are not ready (for example, missing `OPENAI_API_KEY`) are dimmed and cannot be selected; `/model <id>` rejects them with the same reason. Switching between auth classes (xAI session, env API key, or keyless local) asks for confirmation first.
+
 ### Config Default
 
 Set a persistent default in `~/.grok/config.toml`:
