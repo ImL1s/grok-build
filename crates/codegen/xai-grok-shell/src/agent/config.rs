@@ -3936,6 +3936,7 @@ pub struct ConfigModelOverride {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: Option<ApiBackend>,
+    pub auth_scheme: Option<AuthScheme>,
     #[serde(default)]
     pub extra_headers: IndexMap<String, String>,
     pub context_window: Option<u64>,
@@ -3998,6 +3999,9 @@ impl ConfigModelOverride {
         }
         if let Some(ref v) = self.api_backend {
             entry.info.api_backend = v.clone();
+        }
+        if let Some(v) = self.auth_scheme {
+            entry.info.auth_scheme = v;
         }
         if !self.extra_headers.is_empty() {
             entry.info.extra_headers = self.extra_headers.clone();
@@ -6809,6 +6813,16 @@ reasoning_effort = "low"
         let client = xai_grok_sampler::SamplingClient::new(config).expect("client should build");
         let info = client.auth_info();
         assert_eq!(info.auth_type, "bearer");
+    }
+    #[test]
+    fn config_model_override_applies_auth_scheme() {
+        let endpoints = EndpointsConfig::default();
+        let over = ConfigModelOverride {
+            auth_scheme: Some(AuthScheme::None),
+            ..ConfigModelOverride::default()
+        };
+        let entry = over.apply("local", None, &endpoints);
+        assert_eq!(entry.info.auth_scheme, AuthScheme::None);
     }
     #[test]
     fn has_own_credentials_guards_session_vs_external_key() {

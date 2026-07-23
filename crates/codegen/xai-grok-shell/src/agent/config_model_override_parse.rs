@@ -441,6 +441,7 @@ fn field_parse_error(field: &str, value: &toml::Value) -> Option<toml::de::Error
 mod tests {
     use super::*;
     use crate::sampling::ApiBackend;
+    use xai_grok_sampler::AuthScheme;
     use xai_grok_sampling_types::{
         CompactionAtTokens, CompactionsRemaining, ReasoningEffort, ReasoningEffortOption,
     };
@@ -679,6 +680,7 @@ mod tests {
             temperature: Some(0.5),
             top_p: Some(0.9),
             api_backend: Some(ApiBackend::Messages),
+            auth_scheme: Some(AuthScheme::XApiKey),
             extra_headers: [("x-team".to_owned(), "codegen".to_owned())]
                 .into_iter()
                 .collect(),
@@ -718,6 +720,49 @@ mod tests {
         let ParsedModelOverrides { models, warnings } =
             parse_model_overrides(&toml::Value::Table(root));
         (models, warnings)
+    }
+
+    #[test]
+    fn auth_scheme_x_api_key_parses_and_applies() {
+        let mut entry = toml::map::Map::new();
+        entry.insert(
+            "auth_scheme".into(),
+            toml::Value::String("x_api_key".into()),
+        );
+        entry.insert("context_window".into(), toml::Value::Integer(200_000));
+        let (models, warnings) = parse_single_entry(entry);
+        assert!(warnings.is_empty());
+        let over = models.get("m").expect("model m");
+        assert_eq!(over.auth_scheme, Some(AuthScheme::XApiKey));
+    }
+
+    #[test]
+    fn auth_scheme_none_parses() {
+        let mut entry = toml::map::Map::new();
+        entry.insert("auth_scheme".into(), toml::Value::String("none".into()));
+        let (models, warnings) = parse_single_entry(entry);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            models.get("m").unwrap().auth_scheme,
+            Some(AuthScheme::None)
+        );
+    }
+
+    #[test]
+    fn invalid_auth_scheme_warns_and_keeps_entry() {
+        let mut entry = toml::map::Map::new();
+        entry.insert("model".into(), toml::Value::String("kept".into()));
+        entry.insert(
+            "auth_scheme".into(),
+            toml::Value::String("not-a-scheme".into()),
+        );
+        let (models, warnings) = parse_single_entry(entry);
+        let over = models.get("m").expect("model retained");
+        assert_eq!(over.model.as_deref(), Some("kept"));
+        assert!(over.auth_scheme.is_none());
+        assert!(warnings.iter().any(|w| {
+            w.kind == ConfigWarningKind::InvalidValue && w.field() == Some("auth_scheme")
+        }));
     }
 
     #[test]
