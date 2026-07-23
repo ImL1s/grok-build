@@ -604,7 +604,12 @@ impl SamplingClient {
     }
 
     /// Bearer prefix for 401 attribution. Prefers live resolver, falls back to default_headers.
+    /// Under [`AuthScheme::None`], always returns `None` so diagnostics never expose a credential
+    /// prefix (PRD R3.4) even if a live `bearer_resolver` is attached.
     fn current_sent_bearer_prefix(&self) -> Option<String> {
+        if matches!(self.defaults.auth_scheme, AuthScheme::None) {
+            return None;
+        }
         self.bearer_resolver
             .as_ref()
             .and_then(|r| r.current_bearer())
@@ -2143,11 +2148,19 @@ mod tests {
 
     #[test]
     fn none_scheme_auth_info_reports_none_without_prefix() {
-        let cfg = SamplerConfig {
+        #[derive(Debug)]
+        struct LeakResolver;
+        impl crate::config::BearerResolver for LeakResolver {
+            fn current_bearer(&self) -> Option<String> {
+                Some("live-should-not-leak".into())
+            }
+        }
+        let mut cfg = SamplerConfig {
             api_key: Some("should-not-leak".to_string()),
             auth_scheme: AuthScheme::None,
             ..minimal_config()
         };
+        cfg.bearer_resolver = Some(std::sync::Arc::new(LeakResolver));
         let client = SamplingClient::new(cfg).expect("client should build");
         let info = client.auth_info();
         assert_eq!(info.auth_type, "none");
