@@ -742,10 +742,7 @@ mod tests {
         entry.insert("auth_scheme".into(), toml::Value::String("none".into()));
         let (models, warnings) = parse_single_entry(entry);
         assert!(warnings.is_empty());
-        assert_eq!(
-            models.get("m").unwrap().auth_scheme,
-            Some(AuthScheme::None)
-        );
+        assert_eq!(models.get("m").unwrap().auth_scheme, Some(AuthScheme::None));
     }
 
     #[test]

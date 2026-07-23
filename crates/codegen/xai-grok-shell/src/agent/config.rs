@@ -6879,13 +6879,8 @@ reasoning_effort = "low"
     fn none_aux_model_resolves_without_api_key() {
         let endpoints = EndpointsConfig::default();
         let mut catalog = IndexMap::new();
-        let mut entry = test_model_entry(
-            "codellama",
-            "http://127.0.0.1:11434/v1",
-            None,
-            None,
-            None,
-        );
+        let mut entry =
+            test_model_entry("codellama", "http://127.0.0.1:11434/v1", None, None, None);
         entry.info.auth_scheme = AuthScheme::None;
         catalog.insert("local".to_string(), entry);
         let sampler = resolve_aux_model_sampling_config(
