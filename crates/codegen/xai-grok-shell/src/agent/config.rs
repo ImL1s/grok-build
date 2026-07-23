@@ -5258,6 +5258,79 @@ pub fn resolve_web_search_sampling_config(
     }
     resolved.map(crate::tools::config::web_search_sampling_config)
 }
+/// Wire string for [`AuthScheme`] in ACP model `_meta` (`authScheme`).
+fn auth_scheme_meta_value(scheme: AuthScheme) -> &'static str {
+    match scheme {
+        AuthScheme::Bearer => "bearer",
+        AuthScheme::XApiKey => "x_api_key",
+        AuthScheme::None => "none",
+    }
+}
+
+/// Credential class for picker UX: keyless, env/BYOK, or xAI session/login.
+fn auth_class_for_entry(model: &ModelEntry) -> &'static str {
+    if model.info.auth_scheme == AuthScheme::None {
+        "none"
+    } else if model.has_own_credentials()
+        || model.env_key.as_ref().is_some_and(|keys| !keys.is_empty())
+    {
+        "env"
+    } else {
+        "session"
+    }
+}
+
+/// Short provider label for picker rows (`providerHint`).
+fn provider_hint_for_url(base_url: &str) -> String {
+    // Check loopback before `is_xai_api_url` — that helper treats localhost as
+    // cli-chat-proxy for credential refusal, which is not a useful picker label.
+    if let Ok(parsed) = reqwest::Url::parse(base_url) {
+        match parsed.host() {
+            Some(url::Host::Domain(host)) if host == "localhost" => {
+                return "local".to_string();
+            }
+            Some(url::Host::Ipv4(ip)) if ip.is_loopback() => return "local".to_string(),
+            Some(url::Host::Ipv6(ip)) if ip.is_loopback() => return "local".to_string(),
+            _ => {}
+        }
+    }
+    if crate::util::is_xai_api_url(base_url) {
+        return "xAI".to_string();
+    }
+    let Ok(parsed) = reqwest::Url::parse(base_url) else {
+        return base_url.to_string();
+    };
+    match parsed.host() {
+        Some(url::Host::Domain(host)) => host.to_string(),
+        Some(url::Host::Ipv4(ip)) => ip.to_string(),
+        Some(url::Host::Ipv6(ip)) => ip.to_string(),
+        None => base_url.to_string(),
+    }
+}
+
+/// Picker readiness: keyless and typical xAI catalog stay selectable; BYOK
+/// models that declare `env_key`/`api_key` but lack a resolved value are not.
+fn model_readiness(model: &ModelEntry) -> (bool, Option<String>) {
+    if model.info.auth_scheme == AuthScheme::None {
+        return (true, None);
+    }
+    if model.has_own_credentials() {
+        return (true, None);
+    }
+    if let Some(ref env_keys) = model.env_key
+        && !env_keys.is_empty()
+        && env_keys.resolve_value().is_none()
+        && model.api_key.as_ref().is_none_or(|k| k.trim().is_empty())
+    {
+        let reason = env_keys
+            .primary()
+            .map(|name| format!("missing {name}"))
+            .unwrap_or_else(|| "missing API key".to_string());
+        return (false, Some(reason));
+    }
+    (true, None)
+}
+
 pub fn to_acp_model_info(
     models: &IndexMap<String, ModelEntry>,
 ) -> IndexMap<acp::ModelId, acp::ModelInfo> {
@@ -5267,6 +5340,7 @@ pub fn to_acp_model_info(
             let info = model.info();
             let model_id = acp::ModelId::new(Arc::from(key.clone()));
             let total_context_tokens = info.context_window.get();
+            let (ready, readiness_reason) = model_readiness(model);
             let meta = {
                 let mut map = serde_json::Map::new();
                 map.insert(
@@ -5276,6 +5350,25 @@ pub fn to_acp_model_info(
                 map.insert(
                     "agentType".to_string(),
                     serde_json::Value::String(info.agent_type.clone()),
+                );
+                map.insert(
+                    "authScheme".to_string(),
+                    serde_json::Value::String(auth_scheme_meta_value(info.auth_scheme).to_string()),
+                );
+                map.insert(
+                    "authClass".to_string(),
+                    serde_json::Value::String(auth_class_for_entry(model).to_string()),
+                );
+                map.insert("ready".to_string(), serde_json::Value::Bool(ready));
+                if let Some(reason) = readiness_reason {
+                    map.insert(
+                        "readinessReason".to_string(),
+                        serde_json::Value::String(reason),
+                    );
+                }
+                map.insert(
+                    "providerHint".to_string(),
+                    serde_json::Value::String(provider_hint_for_url(&info.base_url)),
                 );
                 if info.supports_reasoning_effort {
                     map.insert(
@@ -7792,6 +7885,81 @@ reasoning_effort = "low"
         let acp_models = to_acp_model_info(&models);
         let meta = acp_models.values().next().unwrap().meta.as_ref().unwrap();
         assert_eq!(meta["totalContextTokens"], 200_000);
+    }
+    #[test]
+    fn acp_model_meta_auth_scheme_none_is_always_ready() {
+        let mut models = IndexMap::new();
+        let mut entry = test_model_entry("local", "http://127.0.0.1:11434/v1", None, None, None);
+        entry.info.auth_scheme = AuthScheme::None;
+        models.insert("local".to_string(), entry);
+        let meta = to_acp_model_info(&models)
+            .values()
+            .next()
+            .unwrap()
+            .meta
+            .clone()
+            .unwrap();
+        assert_eq!(meta["authScheme"], "none");
+        assert_eq!(meta["authClass"], "none");
+        assert_eq!(meta["ready"], true);
+        assert!(meta.get("readinessReason").is_none());
+        assert_eq!(meta["providerHint"], "local");
+    }
+    #[test]
+    #[serial]
+    fn acp_model_meta_missing_env_key_is_not_ready() {
+        let var = "GROK_TEST_MISSING_ENV_READINESS";
+        let _guard = EnvGuard::unset(var);
+        let mut models = IndexMap::new();
+        let entry = test_model_entry("byok", "https://api.openai.com/v1", None, Some(var), None);
+        models.insert("byok".to_string(), entry);
+        let meta = to_acp_model_info(&models)
+            .values()
+            .next()
+            .unwrap()
+            .meta
+            .clone()
+            .unwrap();
+        assert_eq!(meta["authScheme"], "bearer");
+        assert_eq!(meta["authClass"], "env");
+        assert_eq!(meta["ready"], false);
+        assert_eq!(meta["readinessReason"], format!("missing {var}"));
+        assert_eq!(meta["providerHint"], "api.openai.com");
+    }
+    #[test]
+    #[serial]
+    fn acp_model_meta_own_credentials_ready() {
+        let var = "GROK_TEST_OWN_CREDS_READINESS";
+        let _guard = EnvGuard::set(var, "sk-test");
+        let mut models = IndexMap::new();
+        let entry = test_model_entry("byok", "https://api.openai.com/v1", None, Some(var), None);
+        models.insert("byok".to_string(), entry);
+        let meta = to_acp_model_info(&models)
+            .values()
+            .next()
+            .unwrap()
+            .meta
+            .clone()
+            .unwrap();
+        assert_eq!(meta["authClass"], "env");
+        assert_eq!(meta["ready"], true);
+        assert!(meta.get("readinessReason").is_none());
+    }
+    #[test]
+    fn acp_model_meta_first_party_xai_session_ready_without_env() {
+        let mut models = IndexMap::new();
+        let entry = test_model_entry("grok", "https://api.x.ai/v1", None, None, None);
+        models.insert("grok".to_string(), entry);
+        let meta = to_acp_model_info(&models)
+            .values()
+            .next()
+            .unwrap()
+            .meta
+            .clone()
+            .unwrap();
+        assert_eq!(meta["authClass"], "session");
+        assert_eq!(meta["ready"], true);
+        assert_eq!(meta["providerHint"], "xAI");
     }
     #[test]
     fn hidden_model_excluded_from_acp_but_kept_in_catalog() {

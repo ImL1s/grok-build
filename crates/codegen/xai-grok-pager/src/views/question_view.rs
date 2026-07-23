@@ -127,6 +127,14 @@ pub enum LocalQuestionKind {
         model_id: agent_client_protocol::ModelId,
         effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
     },
+    /// Soft confirm when switching between auth classes
+    /// (`none` ↔ `session`/`env`/`bearer`-ish). On Yes, proceed with the
+    /// pending model switch (and optionally persist as default).
+    AuthClassSwitch {
+        model_id: agent_client_protocol::ModelId,
+        effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+        persist_default: bool,
+    },
     DoctorFix {
         target: crate::app::actions::DoctorFixTarget,
         plan: Box<crate::diagnostics::FixPlan>,

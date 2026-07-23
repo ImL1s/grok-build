@@ -75,6 +75,9 @@ impl SlashCommand for ModelCommand {
         // first, a shorter catalog entry ("Grok") would steal the prefix and
         // treat "4.5" as an effort level.
         if let Some(id) = ctx.models.resolve_by_name_or_id(trimmed) {
+            if let Some(reason) = model_not_ready_reason(ctx.models, &id) {
+                return CommandResult::Error(reason);
+            }
             return CommandResult::Action(Action::SetDefaultModel(id));
         }
 
@@ -91,6 +94,9 @@ impl SlashCommand for ModelCommand {
                 .map(supports_reasoning_effort)
                 .unwrap_or(false)
         {
+            if let Some(reason) = model_not_ready_reason(ctx.models, &id) {
+                return CommandResult::Error(reason);
+            }
             return match ctx.models.resolve_effort_for_model(&id, token) {
                 Ok(effort) => CommandResult::Action(Action::SwitchModel {
                     model_id: id,
@@ -111,6 +117,58 @@ fn resolve_model(models: &ModelState, name: &str) -> Option<acp::ModelId> {
 
 fn supports_reasoning_effort(info: &acp::ModelInfo) -> bool {
     supports_reasoning_effort_meta(info.meta.as_ref())
+}
+
+/// Parsed readiness fields from ACP `ModelInfo._meta`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelReadinessMeta {
+    auth_scheme: String,
+    auth_class: String,
+    ready: bool,
+    readiness_reason: String,
+    provider_hint: String,
+}
+
+fn parse_model_readiness(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> ModelReadinessMeta {
+    let get_str = |key: &str| -> String {
+        meta.and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let ready = meta
+        .and_then(|m| m.get("ready"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    ModelReadinessMeta {
+        auth_scheme: get_str("authScheme"),
+        auth_class: get_str("authClass"),
+        ready,
+        readiness_reason: get_str("readinessReason"),
+        provider_hint: get_str("providerHint"),
+    }
+}
+
+fn model_not_ready_reason(models: &ModelState, id: &acp::ModelId) -> Option<String> {
+    let info = models.available.get(id)?;
+    let readiness = parse_model_readiness(info.meta.as_ref());
+    if readiness.ready {
+        return None;
+    }
+    Some(if readiness.readiness_reason.is_empty() {
+        format!("{} is not ready", info.name)
+    } else {
+        readiness.readiness_reason
+    })
+}
+
+/// Auth class string from ACP model meta (`none` | `env` | `session`).
+pub(crate) fn auth_class_from_model_meta(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> String {
+    parse_model_readiness(meta).auth_class
 }
 
 /// Split `args` into `(prefix, last_token)` on the final whitespace run.
@@ -156,6 +214,7 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
     for (id, info) in &models.available {
         let is_current = current_id == Some(id);
         let supports = supports_reasoning_effort(info);
+        let readiness = parse_model_readiness(info.meta.as_ref());
 
         let display = if is_current {
             format!("{} (current)", info.name)
@@ -165,18 +224,49 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
 
         // Trailing space on reasoning models: signals "more input
         // expected" to the prompt widget so Enter advances to effort
-        // phase instead of submitting.
-        let insert_text = if supports {
+        // phase instead of submitting. Unready models stay non-chaining
+        // so selection is hard-blocked instead of advancing to effort.
+        let insert_text = if supports && readiness.ready {
             format!("{} ", info.name)
         } else {
             info.name.clone()
+        };
+
+        let hint = if readiness.provider_hint.is_empty() {
+            "unknown".to_string()
+        } else {
+            readiness.provider_hint.clone()
+        };
+        let scheme = if readiness.auth_scheme.is_empty() {
+            "bearer".to_string()
+        } else {
+            readiness.auth_scheme.clone()
+        };
+        let description = format!("{hint} · {scheme}");
+
+        let badge = if !readiness.ready {
+            "missing".to_string()
+        } else if readiness.auth_scheme == "none" || readiness.auth_class == "none" {
+            "none".to_string()
+        } else {
+            "ready".to_string()
         };
 
         items.push(ArgItem {
             display,
             match_text: info.name.clone(),
             insert_text,
-            description: info.description.clone().unwrap_or_default(),
+            description,
+            badge,
+            dimmed: !readiness.ready,
+            non_selectable: !readiness.ready,
+            blocked_reason: if readiness.ready {
+                String::new()
+            } else if readiness.readiness_reason.is_empty() {
+                format!("{} is not ready", info.name)
+            } else {
+                readiness.readiness_reason
+            },
         });
     }
     items
@@ -488,6 +578,106 @@ mod tests {
                 assert_eq!(resolved_id, id);
             }
             other => panic!("expected Action::SetDefaultModel(<id>), got {other:?}"),
+        }
+    }
+
+    fn model_with_meta(
+        id: &str,
+        name: &str,
+        meta: serde_json::Map<String, serde_json::Value>,
+    ) -> (acp::ModelId, acp::ModelInfo) {
+        let id = acp::ModelId::new(Arc::from(id));
+        let info = acp::ModelInfo::new(id.clone(), name.to_string()).meta(Some(meta));
+        (id, info)
+    }
+
+    #[test]
+    fn build_model_items_badges_ready_missing_none() {
+        let mut state = ModelState::default();
+        let (ready_id, ready_info) = model_with_meta(
+            "ready-m",
+            "Ready Model",
+            serde_json::Map::from_iter([
+                ("authScheme".into(), serde_json::json!("bearer")),
+                ("authClass".into(), serde_json::json!("session")),
+                ("ready".into(), serde_json::json!(true)),
+                ("providerHint".into(), serde_json::json!("xAI")),
+            ]),
+        );
+        let (missing_id, missing_info) = model_with_meta(
+            "missing-m",
+            "Missing Model",
+            serde_json::Map::from_iter([
+                ("authScheme".into(), serde_json::json!("bearer")),
+                ("authClass".into(), serde_json::json!("env")),
+                ("ready".into(), serde_json::json!(false)),
+                (
+                    "readinessReason".into(),
+                    serde_json::json!("missing OPENAI_API_KEY"),
+                ),
+                ("providerHint".into(), serde_json::json!("api.openai.com")),
+            ]),
+        );
+        let (none_id, none_info) = model_with_meta(
+            "none-m",
+            "None Model",
+            serde_json::Map::from_iter([
+                ("authScheme".into(), serde_json::json!("none")),
+                ("authClass".into(), serde_json::json!("none")),
+                ("ready".into(), serde_json::json!(true)),
+                ("providerHint".into(), serde_json::json!("local")),
+            ]),
+        );
+        state.available.insert(ready_id, ready_info);
+        state.available.insert(missing_id, missing_info);
+        state.available.insert(none_id, none_info);
+
+        let items = build_model_items(&state);
+        let ready = items
+            .iter()
+            .find(|i| i.match_text == "Ready Model")
+            .unwrap();
+        assert_eq!(ready.badge, "ready");
+        assert!(!ready.dimmed);
+        assert!(!ready.non_selectable);
+        assert_eq!(ready.description, "xAI · bearer");
+
+        let missing = items
+            .iter()
+            .find(|i| i.match_text == "Missing Model")
+            .unwrap();
+        assert_eq!(missing.badge, "missing");
+        assert!(missing.dimmed);
+        assert!(missing.non_selectable);
+        assert_eq!(missing.blocked_reason, "missing OPENAI_API_KEY");
+        assert_eq!(missing.description, "api.openai.com · bearer");
+
+        let none = items.iter().find(|i| i.match_text == "None Model").unwrap();
+        assert_eq!(none.badge, "none");
+        assert!(!none.non_selectable);
+        assert_eq!(none.description, "local · none");
+    }
+
+    #[test]
+    fn run_hard_blocks_unready_model() {
+        let mut state = ModelState::default();
+        let (id, info) = model_with_meta(
+            "byok",
+            "BYOK",
+            serde_json::Map::from_iter([
+                ("ready".into(), serde_json::json!(false)),
+                (
+                    "readinessReason".into(),
+                    serde_json::json!("missing OPENAI_API_KEY"),
+                ),
+            ]),
+        );
+        state.available.insert(id, info);
+        let mut ctx = dummy_exec_ctx(&state);
+        let result = ModelCommand.run(&mut ctx, "BYOK");
+        match result {
+            CommandResult::Error(msg) => assert_eq!(msg, "missing OPENAI_API_KEY"),
+            other => panic!("expected Error, got {other:?}"),
         }
     }
 }

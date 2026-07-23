@@ -41,12 +41,14 @@ impl SlashCommand for UsageCommand {
                 match_text: "show".into(),
                 insert_text: "show".into(),
                 description: "View usage".into(),
+                ..Default::default()
             },
             ArgItem {
                 display: "manage".into(),
                 match_text: "manage".into(),
                 insert_text: "manage".into(),
                 description: "Manage billing".into(),
+                ..Default::default()
             },
         ])
     }

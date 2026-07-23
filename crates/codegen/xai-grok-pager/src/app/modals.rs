@@ -546,17 +546,30 @@ impl AgentView {
             Selected(crate::slash::command::ArgItem),
             Closed,
             FilterChanged,
+            BlockedToast(String),
         }
 
-        let (command_clone, in_effort_phase, entry_count) = match self.active_modal.as_ref() {
-            Some(ActiveModal::ArgPicker {
-                command,
-                args_query,
-                items,
-                ..
-            }) => (command.clone(), !args_query.is_empty(), items.len()),
-            _ => return InputOutcome::Changed,
-        };
+        let (command_clone, in_effort_phase, entry_count, non_sel, non_sel_clickable) =
+            match self.active_modal.as_ref() {
+                Some(ActiveModal::ArgPicker {
+                    command,
+                    args_query,
+                    items,
+                    ..
+                }) => {
+                    let non_sel: Vec<bool> = items.iter().map(|i| i.non_selectable).collect();
+                    // Unready rows stay mouse-clickable so we can toast the reason.
+                    let non_sel_clickable = non_sel.clone();
+                    (
+                        command.clone(),
+                        !args_query.is_empty(),
+                        items.len(),
+                        non_sel,
+                        non_sel_clickable,
+                    )
+                }
+                _ => return InputOutcome::Changed,
+            };
 
         let config = PickerConfig {
             title: None,
@@ -565,8 +578,8 @@ impl AgentView {
             esc_clears_query: false,
             shortcuts: Some(crate::views::picker::picker_shortcuts()),
             pending_hint: None,
-            non_selectable: &[],
-            non_selectable_clickable: &[],
+            non_selectable: &non_sel,
+            non_selectable_clickable: &non_sel_clickable,
             shortcuts_area: None,
             tabs: None,
             active_tab: 0,
@@ -587,7 +600,26 @@ impl AgentView {
             };
             match handle_picker_input(ev, state, entry_count, &config) {
                 PickerOutcome::Selected(i) => match items.get(i).cloned() {
+                    Some(item) if item.non_selectable => {
+                        let reason = if item.blocked_reason.is_empty() {
+                            format!("{} is not ready", item.display)
+                        } else {
+                            item.blocked_reason
+                        };
+                        ArgPickerStep::BlockedToast(reason)
+                    }
                     Some(item) => ArgPickerStep::Selected(item),
+                    None => return InputOutcome::Changed,
+                },
+                PickerOutcome::NonSelectableClick(i) => match items.get(i).cloned() {
+                    Some(item) => {
+                        let reason = if item.blocked_reason.is_empty() {
+                            format!("{} is not ready", item.display)
+                        } else {
+                            item.blocked_reason
+                        };
+                        ArgPickerStep::BlockedToast(reason)
+                    }
                     None => return InputOutcome::Changed,
                 },
                 PickerOutcome::Closed => ArgPickerStep::Closed,
@@ -599,6 +631,10 @@ impl AgentView {
         };
 
         match step {
+            ArgPickerStep::BlockedToast(reason) => {
+                self.show_toast(&reason);
+                InputOutcome::Changed
+            }
             ArgPickerStep::FilterChanged => {
                 if let Some(ActiveModal::ArgPicker {
                     items,
@@ -1793,10 +1829,17 @@ impl AgentView {
                     "theme" | "t" => "Pick theme",
                     _ => "Pick option",
                 };
+                let non_sel: Vec<bool> = items.iter().map(|i| i.non_selectable).collect();
                 let picker_entries: Vec<PickerEntry> = items
                     .iter()
                     .enumerate()
                     .map(|(i, item)| {
+                        let badge_color = match item.badge.as_str() {
+                            "missing" => Some(theme.accent_error),
+                            "ready" => Some(theme.accent_success),
+                            "none" => Some(theme.gray),
+                            _ => None,
+                        };
                         PickerEntry::Row(PickerRow {
                             label: &item.display,
                             right_label: &item.description,
@@ -1806,10 +1849,10 @@ impl AgentView {
                             fields: &[],
                             description_lines: &[],
                             summary_lines: &[],
-                            dimmed: false,
+                            dimmed: item.dimmed,
                             indent: 0,
-                            badge: "",
-                            badge_color: None,
+                            badge: item.badge.as_str(),
+                            badge_color,
                             collapsible: false,
                             underline_last_desc: false,
                         })
@@ -1844,7 +1887,7 @@ impl AgentView {
                         &theme,
                         state,
                         &picker_entries,
-                        &[],
+                        &non_sel,
                         false,
                     );
                 }

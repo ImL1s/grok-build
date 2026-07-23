@@ -1680,6 +1680,19 @@ fn translate_local_submit(
                 effort,
             })
         }
+        LocalQuestionKind::AuthClassSwitch {
+            model_id,
+            effort,
+            persist_default,
+        } => {
+            let proceed = *idx == 0;
+            InputOutcome::Action(Action::AuthClassSwitchAnswered {
+                proceed,
+                model_id: model_id.clone(),
+                effort,
+                persist_default,
+            })
+        }
         LocalQuestionKind::DoctorFix { target, plan } => {
             if *idx == 0 {
                 InputOutcome::Action(Action::DoctorFixConfirmed { target, plan })

@@ -766,6 +766,15 @@ pub enum Action {
         model_id: acp::ModelId,
         effort: Option<ReasoningEffort>,
     },
+    /// Answer from the auth-class soft-confirm modal shown when switching
+    /// between `none` / `env` / `session` credential classes.
+    AuthClassSwitchAnswered {
+        /// `true` = proceed with the switch; `false` = cancel.
+        proceed: bool,
+        model_id: acp::ModelId,
+        effort: Option<ReasoningEffort>,
+        persist_default: bool,
+    },
     DoctorFixConfirmed {
         target: DoctorFixTarget,
         plan: Box<crate::diagnostics::FixPlan>,

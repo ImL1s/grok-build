@@ -76,6 +76,7 @@ impl SlashCommand for DoctorCommand {
                 match_text: "fix ssh-wrap terminal.ssh-wrap".into(),
                 insert_text: "fix ssh-wrap".into(),
                 description: "Set up SSH wrapping on this computer".into(),
+                ..Default::default()
             }
         } else {
             ArgItem {
@@ -83,6 +84,7 @@ impl SlashCommand for DoctorCommand {
                 match_text: "fix".into(),
                 insert_text: "fix".into(),
                 description: "Show automatic fixes available here".into(),
+                ..Default::default()
             }
         };
         Some(vec![item])

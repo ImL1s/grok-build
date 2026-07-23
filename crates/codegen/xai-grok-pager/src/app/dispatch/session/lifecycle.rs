@@ -258,6 +258,71 @@ pub(in crate::app::dispatch) fn open_agent_type_mismatch_question(
     agent.prompt.set_text("");
     vec![]
 }
+
+/// Soft-confirm when switching models across auth classes (`none` ↔
+/// `session` / `env`). Mirrors [`open_agent_type_mismatch_question`].
+pub(in crate::app::dispatch) fn open_auth_class_switch_question(
+    app: &mut AppView,
+    model_id: acp::ModelId,
+    effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
+    persist_default: bool,
+    model_name: &str,
+    from_class: &str,
+    to_class: &str,
+) -> Vec<Effect> {
+    use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
+    use xai_grok_tools::implementations::grok_build::ask_user_question::{
+        Question, QuestionOption,
+    };
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return vec![];
+    };
+    if agent.question_view.is_some() {
+        app.show_toast("Finish answering the current question first");
+        return vec![];
+    }
+    let question = Question {
+        question: format!(
+            "Switching to {model_name} changes auth from {from_class} to {to_class}. Continue?"
+        ),
+        id: None,
+        options: vec![
+            QuestionOption {
+                label: "Yes".into(),
+                description: format!("Switch to {model_name}"),
+                preview: None,
+                id: None,
+            },
+            QuestionOption {
+                label: "No".into(),
+                description: "Keep the current model".into(),
+                preview: None,
+                id: None,
+            },
+        ],
+        multi_select: Some(false),
+    };
+    let agent = app.agents.get_mut(&id).expect("agent present (re-borrow)");
+    let stashed = agent.prompt.stash();
+    let state = QuestionViewState::new(
+        format!("auth-class-switch-{}", uuid::Uuid::new_v4()),
+        vec![question],
+        stashed,
+    )
+    .with_local_kind(LocalQuestionKind::AuthClassSwitch {
+        model_id,
+        effort,
+        persist_default,
+    })
+    .with_no_freeform();
+    agent.question_view = Some(state);
+    agent.prompt.set_text("");
+    vec![]
+}
+
 /// Core new-session logic: create a placeholder agent, push the
 /// `/dashboard` tip, and return the `CreateSession` effect.
 ///
@@ -1138,6 +1203,17 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                     .get(&model_id)
                     .map(|info| info.name.clone())
                     .unwrap_or_else(|| model_id.0.to_string());
+                let auth_class = agent
+                    .session
+                    .models
+                    .available
+                    .get(&model_id)
+                    .map(|info| {
+                        crate::slash::commands::model::auth_class_from_model_meta(
+                            info.meta.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
                 let prev_model = agent.session.models.current.clone();
                 let prev_effort = agent.session.models.reasoning_effort;
                 agent.session.models.set_current(model_id.clone(), effort);
@@ -1151,6 +1227,14 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                         format!("Switched to {display_name}")
                     };
                     agent.scrollback.push_block(RenderBlock::system(msg));
+                    let toast = match auth_class.as_str() {
+                        "none" => format!(
+                            "Switched to {display_name} (auth_scheme=none; session credentials not sent)"
+                        ),
+                        "session" => format!("Switched to {display_name} (xAI session)"),
+                        _ => format!("Switched to {display_name}"),
+                    };
+                    agent.show_toast(&toast);
                 }
                 if unchanged {
                     vec![]
@@ -1204,4 +1288,38 @@ pub(in crate::app::dispatch) fn dispatch_agent_type_mismatch_answered(
     } else {
         vec![]
     }
+}
+
+pub(in crate::app::dispatch) fn dispatch_auth_class_switch_answered(
+    app: &mut AppView,
+    proceed: bool,
+    model_id: acp::ModelId,
+    effort: Option<ReasoningEffort>,
+    persist_default: bool,
+) -> Vec<Effect> {
+    if !proceed {
+        return vec![];
+    }
+    if persist_default && effort.is_none() {
+        return crate::app::dispatch::settings::setters::set_default_model_confirmed(app, model_id);
+    }
+    // Session-scoped switch (effort path or explicit non-persist).
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return vec![];
+    };
+    let Some(session_id) = agent.session.session_id.clone() else {
+        agent.session.deferred_model_switch = Some((model_id, effort));
+        return vec![];
+    };
+    agent.session.model_switch_pending = true;
+    vec![Effect::SwitchModel {
+        agent_id: id,
+        session_id,
+        model_id,
+        effort,
+        prev_model_id: None,
+    }]
 }

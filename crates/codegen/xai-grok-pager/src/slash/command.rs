@@ -86,7 +86,7 @@ pub enum CommandResult {
 }
 
 /// A suggestion item for command argument completion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ArgItem {
     /// Display text shown in the dropdown.
     pub display: String,
@@ -96,6 +96,14 @@ pub struct ArgItem {
     pub insert_text: String,
     /// Description shown alongside the item.
     pub description: String,
+    /// Optional badge shown after the label (e.g. "ready", "missing").
+    pub badge: String,
+    /// When true, the row is rendered dimmed.
+    pub dimmed: bool,
+    /// When true, Enter / select is blocked (optionally toast `blocked_reason`).
+    pub non_selectable: bool,
+    /// Toast / error text when a non-selectable row is activated.
+    pub blocked_reason: String,
 }
 
 /// Read-only context for generating suggestions.

@@ -1601,9 +1601,9 @@ fn save_default_model_toast(value: &str) -> String {
     format!("\u{2713} Default model: {value}")
 }
 
-/// Outer dispatcher for `Action::SetDefaultModel`. Switches and persists
-/// and toasts. `PersistSetting` emitted first for consistent rollback;
-/// `SwitchModel` second. Idempotent: same model already active → no-op.
+/// Outer dispatcher for `Action::SetDefaultModel`. Soft-confirms when the
+/// target model's auth class differs from the current one; otherwise
+/// switches, persists, and toasts. Idempotent: same model already active → no-op.
 pub(in crate::app::dispatch) fn set_default_model(
     app: &mut AppView,
     new_id: acp::ModelId,
@@ -1617,16 +1617,90 @@ pub(in crate::app::dispatch) fn set_default_model(
         return vec![];
     };
 
-    // Snapshot previous id + display name from the active agent's
-    // session (the same source `set_default_model_inner` mutates
-    // and the modal reads).
-    let (prev_id, session_id, available_has_new, new_display) = {
+    let (prev_id, available_has_new, new_display, prev_class, new_class) = {
         let Some(agent) = app.agents.get(&aid) else {
             tracing::error!(
                 target: "settings",
                 key = "default_model",
                 "Action::SetDefaultModel: active_view::Agent points to missing agent",
             );
+            return vec![];
+        };
+        let prev_id = agent.session.models.current.clone();
+        let available_has_new = agent.session.models.available.contains_key(&new_id);
+        let new_display = agent.session.models.display_name_for(&new_id);
+        let prev_class = prev_id
+            .as_ref()
+            .and_then(|id| agent.session.models.available.get(id))
+            .map(|info| {
+                crate::slash::commands::model::auth_class_from_model_meta(info.meta.as_ref())
+            })
+            .unwrap_or_default();
+        let new_class = agent
+            .session
+            .models
+            .available
+            .get(&new_id)
+            .map(|info| {
+                crate::slash::commands::model::auth_class_from_model_meta(info.meta.as_ref())
+            })
+            .unwrap_or_default();
+        (
+            prev_id,
+            available_has_new,
+            new_display,
+            prev_class,
+            new_class,
+        )
+    };
+
+    if !available_has_new {
+        tracing::error!(
+            target: "settings",
+            key = "default_model",
+            id = ?new_id,
+            "Action::SetDefaultModel dispatched with model id not in catalog —              validator skew; no-op",
+        );
+        return vec![];
+    }
+
+    // Idempotent: same model already active → no-op.
+    if prev_id.as_ref() == Some(&new_id) {
+        return vec![];
+    }
+
+    // Soft-confirm whenever auth class changes and a current model exists.
+    if prev_id.is_some()
+        && !prev_class.is_empty()
+        && !new_class.is_empty()
+        && prev_class != new_class
+    {
+        return crate::app::dispatch::session::lifecycle::open_auth_class_switch_question(
+            app,
+            new_id,
+            None,
+            true,
+            &new_display,
+            &prev_class,
+            &new_class,
+        );
+    }
+
+    set_default_model_confirmed(app, new_id)
+}
+
+/// Proceed with default-model switch + persist after auth-class confirm (or
+/// when no confirm is needed).
+pub(in crate::app::dispatch) fn set_default_model_confirmed(
+    app: &mut AppView,
+    new_id: acp::ModelId,
+) -> Vec<Effect> {
+    let ActiveView::Agent(aid) = app.active_view else {
+        return vec![];
+    };
+
+    let (prev_id, session_id, available_has_new, new_display) = {
+        let Some(agent) = app.agents.get(&aid) else {
             return vec![];
         };
         let prev_id = agent.session.models.current.clone();
@@ -1637,17 +1711,8 @@ pub(in crate::app::dispatch) fn set_default_model(
     };
 
     if !available_has_new {
-        tracing::error!(
-            target: "settings",
-            key = "default_model",
-            id = ?new_id,
-            "Action::SetDefaultModel dispatched with model id not in catalog — \
-             validator skew; no-op",
-        );
         return vec![];
     }
-
-    // Idempotent: same model already active → no-op.
     if prev_id.as_ref() == Some(&new_id) {
         return vec![];
     }

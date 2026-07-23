@@ -60,9 +60,10 @@ use super::session::fork::{
     dispatch_startup_fork_session,
 };
 use super::session::lifecycle::{
-    clear_startup_actions, dispatch_agent_type_mismatch_answered, dispatch_exit_session,
-    dispatch_new_session, dispatch_new_session_inner, dispatch_new_session_with_id,
-    dispatch_new_worktree_session, dispatch_trust_folder, open_new_session_question,
+    clear_startup_actions, dispatch_agent_type_mismatch_answered,
+    dispatch_auth_class_switch_answered, dispatch_exit_session, dispatch_new_session,
+    dispatch_new_session_inner, dispatch_new_session_with_id, dispatch_new_worktree_session,
+    dispatch_trust_folder, open_new_session_question,
 };
 use super::session::load::{
     dispatch_cycle_session_source_filter, dispatch_load_session, dispatch_pick_content_session,
@@ -853,10 +854,56 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             let ActiveView::Agent(id) = app.active_view else {
                 return vec![];
             };
+            // Soft-confirm auth-class changes before switching.
+            let (prev_id, session_id, new_display, prev_class, new_class) = {
+                let Some(agent) = app.agents.get(&id) else {
+                    return vec![];
+                };
+                let prev_id = agent.session.models.current.clone();
+                let session_id = agent.session.session_id.clone();
+                let new_display = agent.session.models.display_name_for(&model_id);
+                let prev_class = prev_id
+                    .as_ref()
+                    .and_then(|pid| agent.session.models.available.get(pid))
+                    .map(|info| {
+                        crate::slash::commands::model::auth_class_from_model_meta(
+                            info.meta.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let new_class = agent
+                    .session
+                    .models
+                    .available
+                    .get(&model_id)
+                    .map(|info| {
+                        crate::slash::commands::model::auth_class_from_model_meta(
+                            info.meta.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
+                (prev_id, session_id, new_display, prev_class, new_class)
+            };
+            if prev_id.as_ref() != Some(&model_id)
+                && prev_id.is_some()
+                && !prev_class.is_empty()
+                && !new_class.is_empty()
+                && prev_class != new_class
+            {
+                return super::session::lifecycle::open_auth_class_switch_question(
+                    app,
+                    model_id,
+                    effort,
+                    false,
+                    &new_display,
+                    &prev_class,
+                    &new_class,
+                );
+            }
             let Some(agent) = app.agents.get_mut(&id) else {
                 return vec![];
             };
-            let Some(session_id) = agent.session.session_id.clone() else {
+            let Some(session_id) = session_id else {
                 agent.session.deferred_model_switch = Some((model_id, effort));
                 return vec![];
             };
@@ -1190,6 +1237,12 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             model_id,
             effort,
         } => dispatch_agent_type_mismatch_answered(app, start_new, model_id, effort),
+        Action::AuthClassSwitchAnswered {
+            proceed,
+            model_id,
+            effort,
+            persist_default,
+        } => dispatch_auth_class_switch_answered(app, proceed, model_id, effort, persist_default),
         Action::PersistMemoryFullscreen(fs) => {
             vec![Effect::PersistMemoryFullscreen { fullscreen: fs }]
         }
