@@ -339,6 +339,85 @@ async fn broadcast_refresh_skill_baseline_tolerates_dropped_receiver() {
         Ok(crate::session::SessionCommand::RefreshSkillBaseline)
     ));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn invalidate_model_auth_memo_all_sessions_sends_to_each_session() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let agent = build_minimal_agent_for_tests();
+            let sid_a = acp::SessionId::new("sess-memo-a");
+            let sid_b = acp::SessionId::new("sess-memo-b");
+            let (handle_a, _tx_a, mut rx_a) = make_live_session_handle(&sid_a, None);
+            let (handle_b, _tx_b, mut rx_b) = make_live_session_handle(&sid_b, None);
+            agent.sessions.borrow_mut().insert(sid_a, handle_a);
+            agent.sessions.borrow_mut().insert(sid_b, handle_b);
+
+            let n = agent.invalidate_model_auth_memo_all_sessions();
+            assert_eq!(n, 2);
+
+            let cmd_a = tokio::time::timeout(std::time::Duration::from_secs(1), rx_a.recv())
+                .await
+                .expect("timeout waiting for InvalidateModelAuthMemo on A")
+                .expect("channel open");
+            let cmd_b = tokio::time::timeout(std::time::Duration::from_secs(1), rx_b.recv())
+                .await
+                .expect("timeout waiting for InvalidateModelAuthMemo on B")
+                .expect("channel open");
+            assert!(matches!(
+                cmd_a,
+                crate::session::SessionCommand::InvalidateModelAuthMemo
+            ));
+            assert!(matches!(
+                cmd_b,
+                crate::session::SessionCommand::InvalidateModelAuthMemo
+            ));
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn authenticate_local_none_succeeds_without_credentials() {
+    use acp::Agent as _;
+    let agent = build_minimal_agent_for_tests();
+    assert!(agent.auth_manager.current().is_none());
+    assert!(agent.auth_method_id.load().is_none());
+
+    let resp = agent
+        .authenticate(acp::AuthenticateRequest::new(acp::AuthMethodId::new(
+            crate::agent::auth_method::LOCAL_NONE_METHOD_ID,
+        )))
+        .await
+        .expect("local.none must authenticate without a key");
+    let _ = resp;
+
+    let method = agent.auth_method_id.load();
+    assert_eq!(
+        method.as_ref().map(|m| m.0.as_ref()),
+        Some(crate::agent::auth_method::LOCAL_NONE_METHOD_ID)
+    );
+    assert!(
+        agent.auth_manager.current().is_none(),
+        "local.none must not store a session credential"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn authenticate_local_none_rejected_when_preferred_oidc() {
+    use acp::Agent as _;
+    let agent = build_minimal_agent_for_tests();
+    agent.cfg.borrow_mut().grok_com_config.preferred_method =
+        Some(crate::auth::PreferredAuthMethod::Oidc);
+
+    let err = agent
+        .authenticate(acp::AuthenticateRequest::new(acp::AuthMethodId::new(
+            crate::agent::auth_method::LOCAL_NONE_METHOD_ID,
+        )))
+        .await
+        .expect_err("oidc pin must reject local.none");
+    assert_eq!(err.code, acp::Error::auth_required().code);
+    assert!(agent.auth_method_id.load().is_none());
+}
 /// The monotonic turn counter must never wrap on the DB-bound i32 path.
 /// `allocate_turn_number` returns u64; the AB submission casts to i32.
 /// Verify we saturate instead of wrapping.

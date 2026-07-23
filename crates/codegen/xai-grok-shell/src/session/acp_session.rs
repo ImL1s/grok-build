@@ -593,9 +593,11 @@ pub(crate) struct SessionActor {
     /// A fresh `Unknown` (config currently unparseable) falls back to the
     /// last definite value for the same model rather than demoting a live
     /// session to non-refreshable api-key mode. Because a config edit can
-    /// turn the selected model into a per-model BYOK model without changing
-    /// its id, keying on the id alone is insufficient: each model/credential
-    /// chokepoint must clear this memo (`replace(None)`).
+    /// turn the selected model into a per-model BYOK model (or flip
+    /// `auth_scheme` to `none`) without changing its id, keying on the id
+    /// alone is insufficient: each model/credential chokepoint — including
+    /// `x.ai/internal/reload_models` / `reload_models_cache` — must clear
+    /// this memo (`replace(None)`).
     pub(crate) model_auth_memo: std::cell::RefCell<Option<ModelAuthMemo>>,
     /// 401-attribution callback. Joined with the bearer the
     /// sampler sends on the wire to emit an `auth 401 attribution`

@@ -30,6 +30,25 @@ impl MvpAgent {
         }
         session_ids.len()
     }
+    /// After `[model.*]` / catalog hot-reload, drop every session's
+    /// memoized auth facts so a same-id edit to `auth_scheme` (e.g. adding
+    /// `none`) cannot keep serving a stale Bearer + session bearer resolver.
+    pub fn invalidate_model_auth_memo_all_sessions(&self) -> usize {
+        let session_ids: Vec<agent_client_protocol::SessionId> = self
+            .sessions
+            .borrow()
+            .keys()
+            .cloned()
+            .collect();
+        for sid in &session_ids {
+            if let Some(handle) = self.sessions.borrow().get(sid).cloned() {
+                let _ = handle
+                    .cmd_tx
+                    .send(SessionCommand::InvalidateModelAuthMemo);
+            }
+        }
+        session_ids.len()
+    }
     pub fn advertise_commands_all_sessions(&self) -> usize {
         let session_ids: Vec<agent_client_protocol::SessionId> = self
             .sessions

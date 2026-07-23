@@ -1126,6 +1126,29 @@ mod tests {
         assert_eq!(default_id(&built), Some(LOCAL_NONE_METHOD_ID));
     }
 
+    /// Cached session token must not override `local.none` as the default
+    /// when the startup-selected model is explicitly no-auth.
+    #[test]
+    fn selected_no_auth_keeps_local_none_default_even_with_cached_token() {
+        let inputs = AuthMethodsBuildInputs {
+            has_external_api_key: true,
+            has_cached_token: true,
+            preferred_method: None,
+            selected_model_is_no_auth: true,
+            ..default_inputs()
+        };
+        let built = build_auth_methods(inputs);
+        assert_eq!(
+            method_ids(&built).first().copied(),
+            Some(LOCAL_NONE_METHOD_ID)
+        );
+        assert_eq!(default_id(&built), Some(LOCAL_NONE_METHOD_ID));
+        assert!(
+            method_ids(&built).contains(&XAI_API_KEY_METHOD_ID),
+            "BYOK may still be listed after local.none"
+        );
+    }
+
     /// A catalog no-auth model that is *not* selected must not reorder
     /// auth methods for a selected xAI/BYOK model.
     #[test]
@@ -1157,6 +1180,25 @@ mod tests {
         let built = build_auth_methods(inputs);
         assert!(built.methods.is_empty());
         assert!(built.default_auth_method_id.is_none());
+    }
+
+    /// `[auth] preferred_method = oidc` stays fail-closed: never advertise
+    /// or default to `local.none` for a selected no-auth model.
+    #[test]
+    fn preferred_oidc_pin_does_not_fall_through_to_local_none() {
+        let inputs = AuthMethodsBuildInputs {
+            has_external_api_key: true,
+            has_cached_token: true,
+            preferred_method: Some(PreferredAuthMethod::Oidc),
+            selected_model_is_no_auth: true,
+            ..default_inputs()
+        };
+        let built = build_auth_methods(inputs);
+        assert!(
+            !method_ids(&built).contains(&LOCAL_NONE_METHOD_ID),
+            "oidc pin must not advertise local.none"
+        );
+        assert_ne!(default_id(&built), Some(LOCAL_NONE_METHOD_ID));
     }
 
     // ── preferred_method pin (fail-closed) ──────────────────────────────

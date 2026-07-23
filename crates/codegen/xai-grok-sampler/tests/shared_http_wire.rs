@@ -80,3 +80,34 @@ async fn shared_http1_fallback_never_pools() {
     send_one(&client).await;
     assert_eq!(accepts.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn none_auth_scheme_sends_no_auth_headers_on_the_wire() {
+    pin_env();
+    let (base_url, _accepts, heads) = spawn_counting_server().await;
+    let mut cfg = test_config(&base_url, "must-not-leak");
+    cfg.auth_scheme = xai_grok_sampler::AuthScheme::None;
+    cfg.extra_headers.insert(
+        "Authorization".to_string(),
+        "Bearer extra-must-not-leak".to_string(),
+    );
+    cfg.extra_headers
+        .insert("x-api-key".to_string(), "extra-key-must-not-leak".to_string());
+    let client = SamplingClient::new(cfg).unwrap();
+    send_one(&client).await;
+    let heads = heads.lock().unwrap();
+    assert_eq!(heads.len(), 1);
+    let head = &heads[0];
+    assert!(
+        !head.to_ascii_lowercase().contains("authorization:"),
+        "wire request must not include Authorization under AuthScheme::None: {head}"
+    );
+    assert!(
+        !head.to_ascii_lowercase().contains("x-api-key:"),
+        "wire request must not include x-api-key under AuthScheme::None: {head}"
+    );
+    assert!(
+        !head.contains("must-not-leak") && !head.contains("extra-must-not-leak"),
+        "wire request must not leak credential material: {head}"
+    );
+}

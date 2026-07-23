@@ -1799,6 +1799,9 @@ pub(super) async fn run_session(
                                 s.reload_skills_from_disk().await;
                             });
                         }
+                        SessionCommand::InvalidateModelAuthMemo => {
+                            session.invalidate_model_auth_memo();
+                        }
                         SessionCommand::DispatchSessionStartHook { source } => {
                             let envelope = session.fire_hook(
                                 xai_grok_hooks::event::HookEventName::SessionStart,

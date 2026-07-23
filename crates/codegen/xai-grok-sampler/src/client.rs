@@ -447,6 +447,12 @@ impl SamplingClient {
             headers.insert(header_name, header_value);
         }
 
+        // AuthScheme::None wins over accidental auth keys in extra_headers.
+        if matches!(config.auth_scheme, AuthScheme::None) {
+            headers.remove(AUTHORIZATION);
+            headers.remove(HeaderName::from_static("x-api-key"));
+        }
+
         // Add x-grok-client-version header for version gating at the proxy.
         if let Some(client_version) = config.client_version.as_ref()
             && let Ok(header_value) = HeaderValue::from_str(client_version)
@@ -552,25 +558,33 @@ impl SamplingClient {
     /// POST with default headers. Overrides auth from resolver if wired.
     fn post(&self, url: impl reqwest::IntoUrl) -> reqwest::RequestBuilder {
         let mut headers = self.default_headers.clone();
-        if let Some(resolver) = &self.bearer_resolver
-            && let Some(fresh) = resolver.current_bearer()
-        {
-            match self.defaults.auth_scheme {
-                AuthScheme::XApiKey => {
-                    headers.remove(AUTHORIZATION);
-                    if let Ok(v) = HeaderValue::from_str(&fresh) {
-                        headers.insert(HeaderName::from_static("x-api-key"), v);
+        match self.defaults.auth_scheme {
+            // Explicit no-auth: always strip transport auth headers, even when
+            // no resolver is wired (defense against accidental Authorization /
+            // x-api-key in extra_headers or a future new() regression).
+            AuthScheme::None => {
+                headers.remove(AUTHORIZATION);
+                headers.remove(HeaderName::from_static("x-api-key"));
+            }
+            AuthScheme::XApiKey | AuthScheme::Bearer => {
+                if let Some(resolver) = &self.bearer_resolver
+                    && let Some(fresh) = resolver.current_bearer()
+                {
+                    match self.defaults.auth_scheme {
+                        AuthScheme::XApiKey => {
+                            headers.remove(AUTHORIZATION);
+                            if let Ok(v) = HeaderValue::from_str(&fresh) {
+                                headers.insert(HeaderName::from_static("x-api-key"), v);
+                            }
+                        }
+                        AuthScheme::Bearer => {
+                            headers.remove(HeaderName::from_static("x-api-key"));
+                            if let Ok(v) = HeaderValue::from_str(&format!("Bearer {fresh}")) {
+                                headers.insert(AUTHORIZATION, v);
+                            }
+                        }
+                        AuthScheme::None => {}
                     }
-                }
-                AuthScheme::Bearer => {
-                    headers.remove(HeaderName::from_static("x-api-key"));
-                    if let Ok(v) = HeaderValue::from_str(&format!("Bearer {fresh}")) {
-                        headers.insert(AUTHORIZATION, v);
-                    }
-                }
-                AuthScheme::None => {
-                    headers.remove(AUTHORIZATION);
-                    headers.remove(HeaderName::from_static("x-api-key"));
                 }
             }
         }
@@ -2192,6 +2206,34 @@ mod tests {
             req.headers()
                 .get(HeaderName::from_static("x-api-key"))
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn none_scheme_post_strips_auth_even_from_extra_headers() {
+        let mut cfg = SamplerConfig {
+            api_key: None,
+            auth_scheme: AuthScheme::None,
+            ..minimal_config()
+        };
+        cfg.extra_headers
+            .insert("Authorization".to_string(), "Bearer leaked".to_string());
+        cfg.extra_headers
+            .insert("x-api-key".to_string(), "leaked-key".to_string());
+        let client = SamplingClient::new(cfg).expect("client should build");
+        let req = client
+            .post("http://localhost/test")
+            .build()
+            .expect("build request");
+        assert!(
+            req.headers().get(AUTHORIZATION).is_none(),
+            "AuthScheme::None must strip Authorization even when injected via extra_headers"
+        );
+        assert!(
+            req.headers()
+                .get(HeaderName::from_static("x-api-key"))
+                .is_none(),
+            "AuthScheme::None must strip x-api-key even when injected via extra_headers"
         );
     }
 

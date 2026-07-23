@@ -589,6 +589,9 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
 
     agent.models_manager.apply_config(merged_config);
     agent.sync_process_static_api_key(None);
+    // Same model id can flip auth_scheme / BYOK under a hot reload; clear
+    // every session memo so reconstruct cannot keep a stale scheme.
+    agent.invalidate_model_auth_memo_all_sessions();
 
     let count = agent.models_manager.models().len();
     tracing::info!(count, "model list reloaded from config.toml");
@@ -612,6 +615,7 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
 fn handle_reload_models_cache(agent: &MvpAgent) -> ExtResult {
     agent.models_manager.reload_from_disk_cache();
     agent.sync_process_static_api_key(None);
+    agent.invalidate_model_auth_memo_all_sessions();
     ExtMethodResult::success(serde_json::json!({ "reloaded": true }))
         .to_ext_response()
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))

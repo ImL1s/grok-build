@@ -641,6 +641,9 @@ pub enum SessionCommand {
     /// Re-discover skills from disk, update the SkillManager baseline,
     /// and re-advertise slash commands to the client.
     ReloadSkills,
+    /// Drop the memoized per-model auth facts so the next reconstruct
+    /// re-resolves `auth_scheme` / BYOK after a catalog hot-reload.
+    InvalidateModelAuthMemo,
     /// Dispatch session_start hook using the actor's loaded HookRegistry.
     DispatchSessionStartHook {
         /// "new" for brand new sessions, "load" for sessions loaded from disk.
