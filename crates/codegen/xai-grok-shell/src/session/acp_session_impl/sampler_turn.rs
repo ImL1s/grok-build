@@ -36,6 +36,10 @@ struct SessionTokenAuthGate {
     /// BYOK status still refresh against cli-chat-proxy / `*.x.ai` without
     /// risking a session-token leak to a third-party BYOK endpoint.
     endpoint_is_first_party: bool,
+    /// Active model's transport auth scheme. `AuthScheme::None` forces the
+    /// gate off so session bearers are never attached or refreshed after a
+    /// model switch to a keyless local endpoint.
+    auth_scheme: xai_grok_sampler::AuthScheme,
 }
 impl SessionTokenAuthGate {
     /// Single place `is_session_based` / `endpoint_is_first_party` are derived,
@@ -44,15 +48,20 @@ impl SessionTokenAuthGate {
         auth_method_id: Option<&acp::AuthMethodId>,
         model_byok: crate::agent::auth_method::ModelByok,
         base_url: &str,
+        auth_scheme: xai_grok_sampler::AuthScheme,
     ) -> Self {
         Self {
             is_session_based: auth_method_id
                 .is_some_and(crate::agent::auth_method::is_session_based_method),
             model_byok,
             endpoint_is_first_party: crate::util::is_xai_api_url(base_url),
+            auth_scheme,
         }
     }
     fn active(self) -> bool {
+        if self.auth_scheme == xai_grok_sampler::AuthScheme::None {
+            return false;
+        }
         crate::agent::auth_method::session_token_auth_gate(
             self.is_session_based,
             self.model_byok,
@@ -347,11 +356,17 @@ impl SessionActor {
     /// Gate inputs for `model_id` routed to `base_url`. See
     /// [`crate::agent::auth_method::session_token_auth_gate`] for the rationale
     /// (`base_url` keeps an `Unknown` BYOK status refreshable only
-    /// against first-party xAI hosts).
+    /// against first-party xAI hosts). Also inactive for
+    /// [`xai_grok_sampler::AuthScheme::None`].
     fn auth_gate(&self, model_id: &str, base_url: &str) -> SessionTokenAuthGate {
-        let byok = self.model_auth_facts(model_id).byok;
+        let facts = self.model_auth_facts(model_id);
         let auth_method = self.auth_method_id.load();
-        SessionTokenAuthGate::new(auth_method.as_deref(), byok, base_url)
+        SessionTokenAuthGate::new(
+            auth_method.as_deref(),
+            facts.byok,
+            base_url,
+            facts.auth_scheme,
+        )
     }
     /// Emit a unified-log breadcrumb whenever the session-token refresh gate is
     /// evaluated with an **`Unknown`** per-model BYOK status on a session-based
@@ -439,9 +454,17 @@ impl SessionActor {
         let creds = self.chat_state_handle.get_credentials().await;
         let model_facts = self.model_auth_facts(cfg.model.as_str());
         let auth_method = self.auth_method_id.load();
-        let gate =
-            SessionTokenAuthGate::new(auth_method.as_deref(), model_facts.byok, &cfg.base_url);
-        let use_bearer_resolver = gate.active();
+        let gate = SessionTokenAuthGate::new(
+            auth_method.as_deref(),
+            model_facts.byok,
+            &cfg.base_url,
+            model_facts.auth_scheme,
+        );
+        // Security boundary: never attach a live session bearer (or rely on
+        // gate.active alone) when the active model is keyless — even if the
+        // ACP method is still session-based after a model switch.
+        let use_bearer_resolver =
+            gate.active() && model_facts.auth_scheme != xai_grok_sampler::AuthScheme::None;
         self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
         let auth_scheme = model_facts.auth_scheme;
         let mut extra_headers = cfg.extra_headers;

@@ -4995,6 +4995,8 @@ pub fn resolve_aux_model_sampling_config(
 /// The resolver gate is host-based, stricter than `session_token_auth_gate`:
 /// a session-token deployment on a custom `models_base_url` loses aux-sampler
 /// refresh, rather than risk the session bearer on a third-party endpoint.
+/// `AuthScheme::None` aux models also skip the resolver so a keyless helper
+/// never inherits a live session bearer.
 pub fn stamp_session_local_sampler_fields(
     cfg: &mut SamplerConfig,
     active_session_config: &SamplerConfig,
@@ -5003,7 +5005,7 @@ pub fn stamp_session_local_sampler_fields(
 ) {
     cfg.client_identifier = client_identifier;
     cfg.attribution_callback = active_session_config.attribution_callback.clone();
-    if crate::util::is_xai_api_bearer_url(&cfg.base_url) {
+    if cfg.auth_scheme != AuthScheme::None && crate::util::is_xai_api_bearer_url(&cfg.base_url) {
         cfg.bearer_resolver = active_session_config.bearer_resolver.clone();
     }
     cfg.max_retries = max_retries;
@@ -5826,7 +5828,7 @@ reasoning_effort = "low"
     }
     /// The session bearer resolver must never be stamped onto a third-party
     /// sampler: the sampler substitutes the resolver's bearer at request
-    /// time.
+    /// time. `AuthScheme::None` also refuses the stamp on first-party hosts.
     #[test]
     fn session_resolver_is_not_stamped_onto_third_party_samplers() {
         #[derive(Debug)]
@@ -5857,6 +5859,16 @@ reasoning_effort = "low"
         assert!(
             first_party.bearer_resolver.is_some(),
             "first-party aux samplers keep the session refresh behavior"
+        );
+        let mut none_scheme = SamplerConfig {
+            base_url: EndpointsConfig::default().resolve_inference_base_url(),
+            auth_scheme: AuthScheme::None,
+            ..SamplerConfig::default()
+        };
+        stamp_session_local_sampler_fields(&mut none_scheme, &session_cfg, None, None);
+        assert!(
+            none_scheme.bearer_resolver.is_none(),
+            "AuthScheme::None must never inherit the session bearer resolver"
         );
     }
     /// A cold cache disables web search rather than sending an

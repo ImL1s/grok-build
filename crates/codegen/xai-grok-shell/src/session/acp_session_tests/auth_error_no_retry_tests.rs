@@ -983,6 +983,109 @@ async fn reconstruct_full_config_no_bearer_resolver_for_byok_model_on_session_me
         .await;
 }
 
+/// Session-based ACP method + `AuthScheme::None` must never attach the live
+/// session bearer resolver — even if BYOK classification would otherwise keep
+/// the gate active (model switch after OIDC login).
+#[tokio::test(flavor = "current_thread")]
+async fn reconstruct_full_config_no_bearer_resolver_for_none_auth_scheme_on_session_method() {
+    use crate::agent::auth_method::ModelByok;
+    use crate::agent::config::ModelAuthFacts;
+    use xai_grok_sampler::AuthScheme;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_dir, am) = auth_manager_with_valid_token("session-token");
+            let (actor, _rx) = make_actor_with_method_and_credentials(
+                Some(am),
+                "cached_token",
+                xai_chat_state::AuthType::SessionToken,
+                "stale-session-jwt".to_string(),
+            )
+            .await;
+
+            let model = actor
+                .chat_state_handle
+                .get_sampling_config()
+                .await
+                .map(|c| c.model)
+                .unwrap_or_default();
+            actor
+                .model_auth_memo
+                .replace(Some(crate::session::acp_session::ModelAuthMemo {
+                    model_id: model,
+                    facts: ModelAuthFacts {
+                        // NotByok keeps session_token_auth_gate active on a
+                        // session method — the AuthScheme::None conjunction
+                        // is what must suppress the resolver.
+                        byok: ModelByok::NotByok,
+                        auth_scheme: AuthScheme::None,
+                    },
+                    provider: None,
+                }));
+
+            let cfg = actor.reconstruct_full_config().await;
+
+            assert!(
+                cfg.bearer_resolver.is_none(),
+                "AuthScheme::None must never attach the session bearer resolver"
+            );
+            assert_eq!(cfg.auth_scheme, AuthScheme::None);
+        })
+        .await;
+}
+
+/// Pre-flight session refresh must also stay off for `AuthScheme::None`, so a
+/// model switch cannot rewrite chat-state credentials with a live OIDC token.
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_token_if_expired_skips_session_refresh_for_none_auth_scheme() {
+    use crate::agent::auth_method::ModelByok;
+    use crate::agent::config::ModelAuthFacts;
+    use xai_grok_sampler::AuthScheme;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_dir, am) = auth_manager_with_valid_token("fresh-session-token");
+            let (actor, _rx) = make_actor_with_method_and_credentials(
+                Some(am),
+                "cached_token",
+                xai_chat_state::AuthType::SessionToken,
+                "stale-session-jwt".to_string(),
+            )
+            .await;
+
+            let model = actor
+                .chat_state_handle
+                .get_sampling_config()
+                .await
+                .map(|c| c.model)
+                .unwrap_or_default();
+            actor
+                .model_auth_memo
+                .replace(Some(crate::session::acp_session::ModelAuthMemo {
+                    model_id: model,
+                    facts: ModelAuthFacts {
+                        byok: ModelByok::NotByok,
+                        auth_scheme: AuthScheme::None,
+                    },
+                    provider: None,
+                }));
+
+            actor.refresh_token_if_expired().await;
+
+            assert_eq!(
+                actor
+                    .chat_state_handle
+                    .get_credentials()
+                    .await
+                    .api_key
+                    .as_deref(),
+                Some("stale-session-jwt"),
+                "AuthScheme::None must not heal credentials from the session token"
+            );
+        })
+        .await;
+}
+
 /// Regression: a model-switch chokepoint must invalidate
 /// the memo even when `model_id` is unchanged. Otherwise a config edit that
 /// turns the current model into a per-model BYOK model on a third-party

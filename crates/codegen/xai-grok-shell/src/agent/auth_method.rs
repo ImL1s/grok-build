@@ -120,10 +120,12 @@ pub struct BuiltAuthMethods {
 /// Build the `auth_methods` list and default `auth_method_id` from
 /// pre-computed inputs.
 ///
-/// REGRESSION GUARD: when unpinned and
-/// `has_external_api_key` is true, the **first** entry MUST be `xai.api_key`.
-/// A prior change deferred it to the END for per-model credentials, which made
-/// the pager send per-model-key users to the login screen. Unit tests lock this.
+/// REGRESSION GUARD: when unpinned, `has_external_api_key` is true, and
+/// `selected_model_is_no_auth` is **false**, the **first** entry MUST be
+/// `xai.api_key`. A prior change deferred it to the END for per-model
+/// credentials, which made the pager send per-model-key users to the login
+/// screen. Unit tests lock this. When `selected_model_is_no_auth` is true,
+/// `local.none` is first instead (and is the default).
 ///
 /// Unpinned ordering (when each method is enabled):
 /// 1. `local.none`      (if `selected_model_is_no_auth`)
