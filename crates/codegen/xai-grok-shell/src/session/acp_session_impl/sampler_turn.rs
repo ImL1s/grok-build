@@ -497,8 +497,15 @@ impl SessionActor {
                 extra_headers.insert("x-compaction-at".to_string(), value.to_string());
             }
         }
+        // Security boundary: strip chat-state credentials for keyless models so
+        // a stale session JWT cannot survive a model switch onto AuthScheme::None.
+        let api_key = if auth_scheme == xai_grok_sampler::AuthScheme::None {
+            None
+        } else {
+            creds.api_key
+        };
         SamplingConfig {
-            api_key: creds.api_key,
+            api_key,
             base_url: cfg.base_url,
             model: cfg.model,
             max_completion_tokens: cfg.max_completion_tokens,

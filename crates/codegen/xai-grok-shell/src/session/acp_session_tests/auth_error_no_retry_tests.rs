@@ -1030,6 +1030,10 @@ async fn reconstruct_full_config_no_bearer_resolver_for_none_auth_scheme_on_sess
                 "AuthScheme::None must never attach the session bearer resolver"
             );
             assert_eq!(cfg.auth_scheme, AuthScheme::None);
+            assert!(
+                cfg.api_key.is_none(),
+                "AuthScheme::None must strip stale chat-state session credentials"
+            );
         })
         .await;
 }
