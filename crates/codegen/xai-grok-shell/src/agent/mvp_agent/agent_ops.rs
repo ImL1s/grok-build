@@ -1157,11 +1157,17 @@ impl MvpAgent {
             _ => None,
         };
         let has_session_key = session.is_some();
-        let mut credentials = resolve_credentials(
-            model,
-            session.as_ref().map(|a| a.key.as_str()),
-        );
-        if matches!(preferred, Some(crate::auth::PreferredAuthMethod::Oidc))
+        // AuthScheme::None must never inherit session tokens or SessionToken
+        // rewrites — local/keyless models stay credential-free.
+        let no_auth = model.info.auth_scheme == xai_grok_sampler::AuthScheme::None;
+        let session_key = if no_auth {
+            None
+        } else {
+            session.as_ref().map(|a| a.key.as_str())
+        };
+        let mut credentials = resolve_credentials(model, session_key);
+        if !no_auth
+            && matches!(preferred, Some(crate::auth::PreferredAuthMethod::Oidc))
             && !model.has_own_credentials()
             && credentials.auth_type == xai_chat_state::AuthType::ApiKey
         {
@@ -1171,10 +1177,13 @@ impl MvpAgent {
         crate::agent::config::enforce_disable_api_key_auth(
             &mut credentials,
             self.cfg.borrow().grok_com_config.api_key_auth_disabled(),
-            session.as_ref().map(|a| a.key.as_str()),
+            session_key,
         );
-        if !has_session_key && credentials.auth_type == xai_chat_state::AuthType::ApiKey
-            && !model.has_own_credentials() && self.is_session_based_auth()
+        if !no_auth
+            && !has_session_key
+            && credentials.auth_type == xai_chat_state::AuthType::ApiKey
+            && !model.has_own_credentials()
+            && self.is_session_based_auth()
         {
             tracing::info!(
                 model = model.info().model.as_str(),

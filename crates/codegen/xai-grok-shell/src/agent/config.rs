@@ -4690,8 +4690,19 @@ pub(crate) fn first_own_credential(
 }
 /// Priority: model api_key/env_key > cached auth-provider token > session
 /// token > XAI_API_KEY.
+///
+/// `AuthScheme::None` short-circuits: no ambient model/env/session/global
+/// credentials are attached (local / keyless OpenAI-compatible endpoints).
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
     let info = model.info();
+    if info.auth_scheme == AuthScheme::None {
+        return ResolvedCredentials {
+            api_key: None,
+            base_url: info.base_url.clone(),
+            auth_type: xai_chat_state::AuthType::ApiKey,
+            auth_scheme: AuthScheme::None,
+        };
+    }
     let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
         (
             Some(key),
@@ -4903,7 +4914,7 @@ pub fn resolve_aux_model_sampling_config(
             None,
             None,
         );
-        if sampler.api_key.is_some() {
+        if sampler.api_key.is_some() || sampler.auth_scheme == AuthScheme::None {
             return Some(sampler);
         }
         if entry.effective_auth_provider().is_some() {
@@ -6823,6 +6834,61 @@ reasoning_effort = "low"
         };
         let entry = over.apply("local", None, &endpoints);
         assert_eq!(entry.info.auth_scheme, AuthScheme::None);
+    }
+    /// `auth_scheme = none` is a kill-switch for ambient credentials: model
+    /// keys, env keys, session JWTs, and `XAI_API_KEY` must all be ignored.
+    #[test]
+    #[serial]
+    fn none_auth_scheme_ignores_model_env_session_and_global_keys() {
+        use crate::agent::auth_method::{LEGACY_XAI_API_KEY_ENV_VAR, XAI_API_KEY_ENV_VAR};
+        let _openai = EnvGuard::set("OPENAI_API_KEY", "env-key");
+        let _global = EnvGuard::set(XAI_API_KEY_ENV_VAR, "xai-key");
+        let _legacy = EnvGuard::unset(LEGACY_XAI_API_KEY_ENV_VAR);
+        let mut model = test_model_entry(
+            "local",
+            "http://127.0.0.1:11434/v1",
+            Some("model-key"),
+            Some("OPENAI_API_KEY"),
+            None,
+        );
+        model.info.auth_scheme = AuthScheme::None;
+        let creds = resolve_credentials(&model, Some("session-jwt"));
+        assert!(
+            creds.api_key.is_none(),
+            "AuthScheme::None must ignore model/env/session/global keys"
+        );
+        assert_eq!(creds.auth_scheme, AuthScheme::None);
+        assert_eq!(creds.base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(creds.auth_type, xai_chat_state::AuthType::ApiKey);
+    }
+    /// Aux sampling for a catalog no-auth model must resolve (not fall back
+    /// to the session JWT / XAI proxy) even when the entry has no API key.
+    #[test]
+    fn none_aux_model_resolves_without_api_key() {
+        let endpoints = EndpointsConfig::default();
+        let mut catalog = IndexMap::new();
+        let mut entry = test_model_entry(
+            "codellama",
+            "http://127.0.0.1:11434/v1",
+            None,
+            None,
+            None,
+        );
+        entry.info.auth_scheme = AuthScheme::None;
+        catalog.insert("local".to_string(), entry);
+        let sampler = resolve_aux_model_sampling_config(
+            "local",
+            &catalog,
+            &endpoints,
+            Some("session-jwt"),
+            false,
+            None,
+            None,
+        )
+        .expect("no-auth aux must resolve");
+        assert!(sampler.api_key.is_none());
+        assert_eq!(sampler.auth_scheme, AuthScheme::None);
+        assert_eq!(sampler.base_url, "http://127.0.0.1:11434/v1");
     }
     #[test]
     fn has_own_credentials_guards_session_vs_external_key() {
