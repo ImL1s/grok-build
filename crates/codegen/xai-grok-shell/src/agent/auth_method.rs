@@ -97,6 +97,11 @@ pub struct AuthMethodsBuildInputs<'a> {
     /// Config pin (`[auth] preferred_method`). `None` keeps multi-method
     /// fallthrough; `Some` is fail-closed (only that method family).
     pub preferred_method: Option<PreferredAuthMethod>,
+    /// True when the startup-selected / default model has
+    /// `auth_scheme = none`. When unpinned, advertises `local.none` first
+    /// and selects it as the default. Catalog presence of other no-auth
+    /// models alone must not set this — only the selected model matters.
+    pub selected_model_is_no_auth: bool,
 }
 
 /// Output of [`build_auth_methods`].
@@ -121,19 +126,22 @@ pub struct BuiltAuthMethods {
 /// the pager send per-model-key users to the login screen. Unit tests lock this.
 ///
 /// Unpinned ordering (when each method is enabled):
-/// 1. `xai.api_key`     (if `has_external_api_key`)
-/// 2. `cached_token`    (if `has_cached_token`)
-/// 3. exactly one of:
+/// 1. `local.none`      (if `selected_model_is_no_auth`)
+/// 2. `xai.api_key`     (if `has_external_api_key`)
+/// 3. `cached_token`    (if `has_cached_token`)
+/// 4. exactly one of:
 ///    - `oidc`          (if `has_enterprise_oidc`)
 ///    - `grok.com`      (otherwise)
 ///
 /// Unpinned `default_auth_method_id`:
-/// - `cached_token` if `has_cached_token`
+/// - `local.none`   if `selected_model_is_no_auth`
+/// - `cached_token` else if `has_cached_token`
 /// - `xai.api_key`  else if `has_external_api_key`
 /// - `None`         otherwise
 ///
 /// Pinned (`preferred_method`):
 /// - `ApiKey`: only `xai.api_key` if available; else empty list + `None` (fail).
+///   Does **not** fall through to `local.none`.
 /// - `Oidc`: `cached_token` (if any) + interactive login; never `xai.api_key`.
 ///   Default is `cached_token` when present, else `None` (interactive).
 pub fn build_auth_methods(inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethods {
@@ -145,6 +153,7 @@ pub fn build_auth_methods(inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethod
         login_label,
         has_auth_provider_command,
         preferred_method,
+        selected_model_is_no_auth,
     } = inputs;
 
     match preferred_method {
@@ -163,6 +172,7 @@ pub fn build_auth_methods(inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethod
             enterprise_oidc_issuer,
             login_label,
             has_auth_provider_command,
+            selected_model_is_no_auth,
         ),
     }
 }
@@ -221,30 +231,44 @@ fn build_unpinned(
     enterprise_oidc_issuer: Option<&str>,
     login_label: Option<&str>,
     has_auth_provider_command: bool,
+    selected_model_is_no_auth: bool,
 ) -> BuiltAuthMethods {
     let mut methods: Vec<acp::AuthMethod> = Vec::new();
     let mut default_auth_method_id: Option<acp::AuthMethodId> = None;
 
+    // Selected no-auth model: advertise local.none first and default to it so
+    // the pager skips interactive login. Catalog-only no-auth entries must
+    // not set selected_model_is_no_auth (caller responsibility).
+    if selected_model_is_no_auth {
+        methods.push(local_none_auth_method());
+        default_auth_method_id = Some(acp::AuthMethodId::new(LOCAL_NONE_METHOD_ID));
+    }
+
     if has_external_api_key {
         methods.push(xai_api_key_auth_method());
-        default_auth_method_id = Some(acp::AuthMethodId::new(XAI_API_KEY_METHOD_ID));
+        if default_auth_method_id.is_none() {
+            default_auth_method_id = Some(acp::AuthMethodId::new(XAI_API_KEY_METHOD_ID));
+        }
     }
 
     if has_cached_token {
         methods.push(cached_token_auth_method());
         // cached_token wins over xai.api_key for default_auth_method_id so
         // is_session_based_auth() returns true and OIDC refresh stays alive.
-        let overrode_api_key = default_auth_method_id.is_some();
-        default_auth_method_id = Some(acp::AuthMethodId::new(CACHED_TOKEN_AUTH_METHOD_ID));
-        if overrode_api_key {
-            xai_grok_telemetry::unified_log::info(
-                "auth method priority: cached_token overrides xai.api_key for default_auth_method_id",
-                None,
-                Some(serde_json::json!({
-                    "has_external_api_key": has_external_api_key,
-                    "has_cached_token": has_cached_token,
-                })),
-            );
+        // It does NOT override local.none — keyless local models stay default.
+        if !selected_model_is_no_auth {
+            let overrode_api_key = default_auth_method_id.is_some();
+            default_auth_method_id = Some(acp::AuthMethodId::new(CACHED_TOKEN_AUTH_METHOD_ID));
+            if overrode_api_key {
+                xai_grok_telemetry::unified_log::info(
+                    "auth method priority: cached_token overrides xai.api_key for default_auth_method_id",
+                    None,
+                    Some(serde_json::json!({
+                        "has_external_api_key": has_external_api_key,
+                        "has_cached_token": has_cached_token,
+                    })),
+                );
+            }
         }
     }
 
@@ -291,6 +315,8 @@ pub enum AuthMethodKind {
     CachedToken,
     GrokCom,
     Oidc,
+    /// Keyless local / `auth_scheme = none` — not session-based, not interactive.
+    LocalNone,
     Unknown,
 }
 
@@ -301,6 +327,7 @@ impl AuthMethodKind {
             CACHED_TOKEN_AUTH_METHOD_ID => Self::CachedToken,
             GROK_COM_METHOD_ID => Self::GrokCom,
             OIDC_METHOD_ID => Self::Oidc,
+            LOCAL_NONE_METHOD_ID => Self::LocalNone,
             _ => Self::Unknown,
         }
     }
@@ -435,6 +462,21 @@ pub fn xai_api_key_auth_method() -> acp::AuthMethod {
     )
 }
 
+/// Non-interactive no-credentials method for a selected model with
+/// `auth_scheme = none` (local OpenAI-compatible servers, etc.).
+pub const LOCAL_NONE_METHOD_ID: &str = "local.none";
+pub fn local_none_auth_method() -> acp::AuthMethod {
+    acp::AuthMethod::Agent(
+        acp::AuthMethodAgent::new(
+            acp::AuthMethodId::new(LOCAL_NONE_METHOD_ID),
+            "local.none".to_string(),
+        )
+        .description(Some(
+            "No credentials (auth_scheme = none on the selected model)".into(),
+        )),
+    )
+}
+
 pub const CACHED_TOKEN_AUTH_METHOD_ID: &str = "cached_token";
 pub fn cached_token_auth_method() -> acp::AuthMethod {
     acp::AuthMethod::Agent(
@@ -550,6 +592,13 @@ mod tests {
         assert!(!is_session_based_method(&acp::AuthMethodId::new(
             "unknown-method"
         )));
+        let local_none_id = acp::AuthMethodId::new(LOCAL_NONE_METHOD_ID);
+        let local_none_kind = AuthMethodKind::from_id(&local_none_id);
+        assert_eq!(local_none_kind, AuthMethodKind::LocalNone);
+        assert!(!local_none_kind.is_session_based());
+        assert!(!local_none_kind.is_api_key());
+        assert!(!local_none_kind.needs_interactive_login());
+        assert!(!is_session_based_method(&local_none_id));
     }
 
     use xai_grok_test_support::EnvGuard;
@@ -568,6 +617,7 @@ mod tests {
             login_label: None,
             has_auth_provider_command: false,
             preferred_method: None,
+            selected_model_is_no_auth: false,
         }
     }
 
@@ -1048,6 +1098,63 @@ mod tests {
             Some(AuthMethodKind::GrokCom),
             "no cached token AND no api key: pager must show login (grok.com first)",
         );
+    }
+
+    // ── local.none for selected AuthScheme::None models ─────────────────
+
+    /// Startup-selected model with `auth_scheme = none` must advertise
+    /// non-interactive `local.none` first so the pager skips login.
+    #[test]
+    fn selected_no_auth_model_advertises_local_none_first_when_unpinned() {
+        let inputs = AuthMethodsBuildInputs {
+            has_external_api_key: false,
+            has_cached_token: false,
+            has_enterprise_oidc: false,
+            enterprise_oidc_issuer: None,
+            login_label: None,
+            has_auth_provider_command: false,
+            preferred_method: None,
+            selected_model_is_no_auth: true,
+        };
+        let built = build_auth_methods(inputs);
+        assert_eq!(
+            method_ids(&built).first().copied(),
+            Some(LOCAL_NONE_METHOD_ID)
+        );
+        assert_eq!(default_id(&built), Some(LOCAL_NONE_METHOD_ID));
+    }
+
+    /// A catalog no-auth model that is *not* selected must not reorder
+    /// auth methods for a selected xAI/BYOK model.
+    #[test]
+    fn non_selected_no_auth_does_not_change_xai_ordering() {
+        let inputs = AuthMethodsBuildInputs {
+            has_external_api_key: true,
+            has_cached_token: true,
+            preferred_method: None,
+            selected_model_is_no_auth: false,
+            ..default_inputs()
+        };
+        let built = build_auth_methods(inputs);
+        assert_eq!(
+            method_ids(&built).first().copied(),
+            Some(XAI_API_KEY_METHOD_ID)
+        );
+    }
+
+    /// `[auth] preferred_method = api_key` stays fail-closed: never fall
+    /// through to `local.none` even when the selected model is no-auth.
+    #[test]
+    fn preferred_api_key_pin_does_not_fall_through_to_local_none() {
+        let inputs = AuthMethodsBuildInputs {
+            has_external_api_key: false,
+            preferred_method: Some(PreferredAuthMethod::ApiKey),
+            selected_model_is_no_auth: true,
+            ..default_inputs()
+        };
+        let built = build_auth_methods(inputs);
+        assert!(built.methods.is_empty());
+        assert!(built.default_auth_method_id.is_none());
     }
 
     // ── preferred_method pin (fail-closed) ──────────────────────────────

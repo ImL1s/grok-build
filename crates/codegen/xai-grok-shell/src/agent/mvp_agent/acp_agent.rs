@@ -386,6 +386,12 @@ impl acp::Agent for MvpAgent {
             Some(crate::auth::PreferredAuthMethod::ApiKey) => false,
             _ => has_cached_token,
         };
+        let selected_model_is_no_auth = self
+            .models_manager
+            .models()
+            .get(self.models_manager.current_model_id().0.as_ref())
+            .map(|e| e.info.auth_scheme == xai_grok_sampler::AuthScheme::None)
+            .unwrap_or(false);
         let built = auth_method::build_auth_methods(auth_method::AuthMethodsBuildInputs {
             has_external_api_key,
             has_cached_token,
@@ -394,6 +400,7 @@ impl acp::Agent for MvpAgent {
             login_label: login_label.as_deref(),
             has_auth_provider_command: has_auth_provider,
             preferred_method,
+            selected_model_is_no_auth,
         });
         let auth_methods = built.methods;
         xai_grok_telemetry::unified_log::info(
@@ -407,6 +414,7 @@ impl acp::Agent for MvpAgent {
                 "disable_api_key_auth": disable_api_key_auth,
                 "has_cached_token": has_cached_token,
                 "has_enterprise_oidc": has_enterprise_oidc,
+                "selected_model_is_no_auth": selected_model_is_no_auth,
                 "init_has_current": init_has_current,
                 "init_is_expired": init_is_expired,
                 "auth_mode": self.auth_manager.current().map(|a| format!("{:?}", a.auth_mode)),
@@ -417,6 +425,7 @@ impl acp::Agent for MvpAgent {
         );
         debug_assert!(
             !has_external_api_key
+                || selected_model_is_no_auth
                 || matches!(
                     auth_methods
                         .first()
@@ -424,7 +433,7 @@ impl acp::Agent for MvpAgent {
                     Some(auth_method::AuthMethodKind::XaiApiKey)
                 ),
             "BYOK invariant violated: xai.api_key MUST be auth_methods.first() \
-             when has_external_api_key is true; got {:?}",
+             when has_external_api_key is true (unless selected model is no-auth); got {:?}",
             auth_methods.first().map(|m| m.id()),
         );
         let default_auth_method_id_wire: Option<String> = built
@@ -573,6 +582,21 @@ impl acp::Agent for MvpAgent {
             }
         }
         match arguments.method_id.0.as_ref() {
+            auth_method::LOCAL_NONE_METHOD_ID => {
+                // Keyless selected model: succeed without reading or storing a key.
+                self.set_auth_method(arguments.method_id.clone());
+                self.sync_process_static_api_key(None);
+                self.ensure_telemetry_client();
+                if crate::agent::chat_modes::process_chat_mode_enabled() {
+                    self.chat_modes.warm_in_background();
+                }
+                emit_login_span(true, "local_none", None, None);
+                log_event(xai_grok_telemetry::events::Login {
+                    auth_method: "local.none".to_string(),
+                    user_id: None,
+                });
+                Ok(Default::default())
+            }
             auth_method::XAI_API_KEY_METHOD_ID => {
                 if self.cfg.borrow().grok_com_config.api_key_auth_disabled() {
                     emit_login_span(false, "api_key", None, Some("disabled_by_admin"));
