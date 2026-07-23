@@ -21,6 +21,7 @@ pub enum AuthScheme {
     #[default]
     Bearer,
     XApiKey,
+    None,
 }
 
 /// All knobs that control a single sampling request.

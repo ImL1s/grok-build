@@ -430,6 +430,9 @@ impl SamplingClient {
                     })?;
                     headers.insert(AUTHORIZATION, header_value);
                 }
+                AuthScheme::None => {
+                    // Explicit no-auth: never emit Authorization / x-api-key from api_key.
+                }
             }
         }
 
@@ -565,6 +568,10 @@ impl SamplingClient {
                         headers.insert(AUTHORIZATION, v);
                     }
                 }
+                AuthScheme::None => {
+                    headers.remove(AUTHORIZATION);
+                    headers.remove(HeaderName::from_static("x-api-key"));
+                }
             }
         }
         {
@@ -623,6 +630,7 @@ impl SamplingClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.strip_prefix("Bearer "))
                 .map(|s| s.to_string()),
+            AuthScheme::None => None,
         };
         raw.map(|mut s| {
             // Truncate in-place so we never materialize a heap-resident
@@ -658,6 +666,7 @@ impl SamplingClient {
     pub fn auth_info(&self) -> crate::sampling_log::AuthInfo {
         let auth_prefix = self.current_sent_bearer_prefix();
         let auth_type = match (&self.defaults.auth_scheme, &auth_prefix) {
+            (AuthScheme::None, _) => "none",
             (AuthScheme::XApiKey, Some(_)) => "x-api-key",
             (AuthScheme::Bearer, Some(_)) => "bearer",
             (_, None) => "none",
@@ -2110,6 +2119,64 @@ mod tests {
         assert!(
             client
                 .default_headers
+                .get(HeaderName::from_static("x-api-key"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn none_scheme_emits_no_auth_headers_even_with_api_key() {
+        let cfg = SamplerConfig {
+            api_key: Some("should-not-leak".to_string()),
+            auth_scheme: AuthScheme::None,
+            ..minimal_config()
+        };
+        let client = SamplingClient::new(cfg).expect("client should build");
+        assert!(client.default_headers.get(AUTHORIZATION).is_none());
+        assert!(
+            client
+                .default_headers
+                .get(HeaderName::from_static("x-api-key"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn none_scheme_auth_info_reports_none_without_prefix() {
+        let cfg = SamplerConfig {
+            api_key: Some("should-not-leak".to_string()),
+            auth_scheme: AuthScheme::None,
+            ..minimal_config()
+        };
+        let client = SamplingClient::new(cfg).expect("client should build");
+        let info = client.auth_info();
+        assert_eq!(info.auth_type, "none");
+        assert!(info.auth_prefix.is_none());
+    }
+
+    #[test]
+    fn none_scheme_post_ignores_bearer_resolver() {
+        #[derive(Debug)]
+        struct LeakResolver;
+        impl crate::config::BearerResolver for LeakResolver {
+            fn current_bearer(&self) -> Option<String> {
+                Some("live-should-not-leak".into())
+            }
+        }
+        let mut cfg = SamplerConfig {
+            api_key: Some("stale-should-not-leak".to_string()),
+            auth_scheme: AuthScheme::None,
+            ..minimal_config()
+        };
+        cfg.bearer_resolver = Some(std::sync::Arc::new(LeakResolver));
+        let client = SamplingClient::new(cfg).expect("client should build");
+        let req = client
+            .post("http://localhost/test")
+            .build()
+            .expect("build request");
+        assert!(req.headers().get(AUTHORIZATION).is_none());
+        assert!(
+            req.headers()
                 .get(HeaderName::from_static("x-api-key"))
                 .is_none()
         );
