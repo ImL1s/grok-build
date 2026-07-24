@@ -89,7 +89,7 @@ jobs:
           PROTOC: protoc
         run: |
           cargo test --manifest-path crates/codegen/xai-grok-sampler/Cargo.toml \
-            --test shared_http_wire none_scheme_ -- --nocapture
+            --test shared_http_wire none_auth_scheme_ -- --nocapture
           cargo test --manifest-path crates/codegen/xai-grok-sampler/Cargo.toml \
             none_scheme_ -- --nocapture
 
