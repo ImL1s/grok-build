@@ -91,8 +91,10 @@ async fn none_auth_scheme_sends_no_auth_headers_on_the_wire() {
         "Authorization".to_string(),
         "Bearer extra-must-not-leak".to_string(),
     );
-    cfg.extra_headers
-        .insert("x-api-key".to_string(), "extra-key-must-not-leak".to_string());
+    cfg.extra_headers.insert(
+        "x-api-key".to_string(),
+        "extra-key-must-not-leak".to_string(),
+    );
     let client = SamplingClient::new(cfg).unwrap();
     send_one(&client).await;
     let heads = heads.lock().unwrap();
