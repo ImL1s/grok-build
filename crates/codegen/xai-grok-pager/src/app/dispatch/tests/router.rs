@@ -1036,6 +1036,56 @@ fn switch_model_hard_blocks_unready() {
         "must surface the readiness reason as a toast",
     );
 }
+/// Auth-class confirm (`persist_default=false`) re-checks readiness before
+/// emitting `Effect::SwitchModel`.
+#[test]
+fn auth_class_switch_answered_hard_blocks_unready() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let reason = "missing OPENAI_API_KEY";
+    let (ready_id, ready_info) = model_with_readiness_meta("grok-4.5", "Grok 4.5", true, "");
+    let (unready_id, unready_info) =
+        model_with_readiness_meta("byok", "BYOK", false, reason);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent
+            .session
+            .models
+            .available
+            .insert(ready_id.clone(), ready_info);
+        agent
+            .session
+            .models
+            .available
+            .insert(unready_id.clone(), unready_info);
+        agent.session.models.set_current(ready_id, None);
+    }
+    let effects = dispatch(
+        Action::AuthClassSwitchAnswered {
+            proceed: true,
+            model_id: unready_id,
+            effort: None,
+            persist_default: false,
+        },
+        &mut app,
+    );
+    assert!(
+        effects.is_empty(),
+        "auth-class confirm must hard-block unready model, got {effects:?}",
+    );
+    assert!(
+        !app.agents[&id].session.model_switch_pending,
+        "must not set model_switch_pending for blocked switch",
+    );
+    assert_eq!(
+        app.agents[&id]
+            .toast
+            .as_ref()
+            .map(|(m, _)| m.as_str()),
+        Some(reason),
+        "must surface the readiness reason as a toast",
+    );
+}
 #[test]
 fn switch_model_allowed_when_agent_chat_kind() {
     let mut app = test_app_with_agent();
