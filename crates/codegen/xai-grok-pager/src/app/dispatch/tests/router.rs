@@ -996,8 +996,7 @@ fn switch_model_hard_blocks_unready() {
     let id = AgentId(0);
     let reason = "missing OPENAI_API_KEY";
     let (ready_id, ready_info) = model_with_readiness_meta("grok-4.5", "Grok 4.5", true, "");
-    let (unready_id, unready_info) =
-        model_with_readiness_meta("byok", "BYOK", false, reason);
+    let (unready_id, unready_info) = model_with_readiness_meta("byok", "BYOK", false, reason);
     {
         let agent = app.agents.get_mut(&id).unwrap();
         agent
@@ -1028,10 +1027,7 @@ fn switch_model_hard_blocks_unready() {
         "must not set model_switch_pending for blocked switch",
     );
     assert_eq!(
-        app.agents[&id]
-            .toast
-            .as_ref()
-            .map(|(m, _)| m.as_str()),
+        app.agents[&id].toast.as_ref().map(|(m, _)| m.as_str()),
         Some(reason),
         "must surface the readiness reason as a toast",
     );
@@ -1044,8 +1040,7 @@ fn auth_class_switch_answered_hard_blocks_unready() {
     let id = AgentId(0);
     let reason = "missing OPENAI_API_KEY";
     let (ready_id, ready_info) = model_with_readiness_meta("grok-4.5", "Grok 4.5", true, "");
-    let (unready_id, unready_info) =
-        model_with_readiness_meta("byok", "BYOK", false, reason);
+    let (unready_id, unready_info) = model_with_readiness_meta("byok", "BYOK", false, reason);
     {
         let agent = app.agents.get_mut(&id).unwrap();
         agent
@@ -1078,10 +1073,7 @@ fn auth_class_switch_answered_hard_blocks_unready() {
         "must not set model_switch_pending for blocked switch",
     );
     assert_eq!(
-        app.agents[&id]
-            .toast
-            .as_ref()
-            .map(|(m, _)| m.as_str()),
+        app.agents[&id].toast.as_ref().map(|(m, _)| m.as_str()),
         Some(reason),
         "must surface the readiness reason as a toast",
     );

@@ -1111,8 +1111,7 @@ fn set_default_model_hard_blocks_unready() {
             "Grok 4.5".to_string(),
         ),
     );
-    let (unready_id, unready_info) =
-        model_with_readiness_meta("byok", "BYOK", false, reason);
+    let (unready_id, unready_info) = model_with_readiness_meta("byok", "BYOK", false, reason);
     {
         let agent = app.agents.get_mut(&agent_id).unwrap();
         agent
@@ -1170,8 +1169,7 @@ fn set_default_model_confirmed_hard_blocks_unready() {
     let agent_id = AgentId(0);
     let reason = "missing OPENAI_API_KEY";
     let (ready_id, ready_info) = model_with_readiness_meta("grok-4.5", "Grok 4.5", true, "");
-    let (unready_id, unready_info) =
-        model_with_readiness_meta("byok", "BYOK", false, reason);
+    let (unready_id, unready_info) = model_with_readiness_meta("byok", "BYOK", false, reason);
     {
         let agent = app.agents.get_mut(&agent_id).unwrap();
         agent
@@ -1191,10 +1189,7 @@ fn set_default_model_confirmed_hard_blocks_unready() {
         effects.is_empty(),
         "confirmed path must hard-block unready model, got {effects:?}",
     );
-    assert_eq!(
-        app.agents[&agent_id].session.models.current,
-        Some(ready_id),
-    );
+    assert_eq!(app.agents[&agent_id].session.models.current, Some(ready_id),);
     assert_eq!(
         app.agents[&agent_id]
             .toast

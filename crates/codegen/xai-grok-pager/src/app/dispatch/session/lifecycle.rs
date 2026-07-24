@@ -1300,20 +1300,13 @@ pub(in crate::app::dispatch) fn dispatch_auth_class_switch_answered(
     if !proceed {
         return vec![];
     }
-    if let ActiveView::Agent(id) = app.active_view {
-        if let Some(reason) = app
-            .agents
-            .get(&id)
-            .and_then(|agent| {
-                crate::slash::commands::model::model_not_ready_reason(
-                    &agent.session.models,
-                    &model_id,
-                )
-            })
-        {
-            app.show_toast(&reason);
-            return vec![];
-        }
+    if let ActiveView::Agent(id) = app.active_view
+        && let Some(reason) = app.agents.get(&id).and_then(|agent| {
+            crate::slash::commands::model::model_not_ready_reason(&agent.session.models, &model_id)
+        })
+    {
+        app.show_toast(&reason);
+        return vec![];
     }
     if persist_default && effort.is_none() {
         return crate::app::dispatch::settings::setters::set_default_model_confirmed(app, model_id);

@@ -962,9 +962,10 @@ async fn read_parent_sampling_config(
                 creds.alpha_test_key.as_deref(),
                 &cfg.base_url,
             );
-            let mut auth_scheme = crate::agent::config::try_resolve_model_credentials(&cfg.model, None)
-                .map(|r| r.auth_scheme)
-                .unwrap_or(ctx.sampling_config.auth_scheme);
+            let mut auth_scheme =
+                crate::agent::config::try_resolve_model_credentials(&cfg.model, None)
+                    .map(|r| r.auth_scheme)
+                    .unwrap_or(ctx.sampling_config.auth_scheme);
             if ctx.sampling_config.auth_scheme == xai_grok_sampler::AuthScheme::None {
                 auth_scheme = xai_grok_sampler::AuthScheme::None;
             }
