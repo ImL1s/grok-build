@@ -81,7 +81,7 @@ Triggers:
 Scope is the fork hot path (not full workspace):
 
 - `cargo fmt --all -- --check`
-- `clippy -D warnings` on `xai-grok-sampler`, `xai-grok-shell`, `xai-grok-pager`
+- `clippy --lib -D warnings` on `xai-grok-sampler`, `xai-grok-shell`, `xai-grok-pager` (lib only; avoids unrelated upstream bench/test lints)
 - Targeted auth / readiness / model-picker tests
 
 `main` has no fork workflows — it stays an upstream fast-forward mirror. Do not merge `providers` into `main`.
