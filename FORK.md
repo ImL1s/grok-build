@@ -18,6 +18,22 @@ Remotes:
 
 Feature topic branches (e.g. `feat/…`) merge into `providers`, not into `main`.
 
+## What's different from upstream
+
+Relative to `xai-org/grok-build` `main`, this fork's `providers` branch adds:
+
+| Area | Behavior |
+|------|----------|
+| `AuthScheme::None` | Sampler sends **no** `Authorization` / `x-api-key`. Required for keyless local servers (Ollama, LM Studio, vLLM, …). |
+| `[model.*] auth_scheme` | Per-model override: `"bearer"` (default), `"x_api_key"` (Anthropic-style), or `"none"`. |
+| Credential isolation | No-auth models never inherit ambient session / `XAI_API_KEY` / env credentials. |
+| ACP `local.none` | Advertised only when the **startup-selected** model is no-auth. |
+| Session safety | No bearer resolver / strip stale `api_key` on reconstruct and model switch for `None`; invalidate auth memo on model reload. |
+| TUI readiness | `/model` and Ctrl+M show `ready` / `missing` / `none` badges; hard-block unready; soft-confirm auth-class changes. |
+| Fork ops | [`FORK.md`](FORK.md), [`scripts/sync-upstream.sh`](scripts/sync-upstream.sh), and providers-only [CI](.github/workflows/ci.yml). |
+
+Provider setup examples (Anthropic, OpenAI, Ollama, …): [11-custom-models.md](crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md).
+
 ## Weekly upstream sync
 
 Do **not** force-push `main`. Prefer merge (not rebase) when integrating upstream into the published `providers` line.
