@@ -1090,6 +1090,73 @@ async fn refresh_token_if_expired_skips_session_refresh_for_none_auth_scheme() {
         .await;
 }
 
+/// Switching to `AuthScheme::None` must clear stale session credentials from
+/// chat_state even when the caller passes a non-None `api_key` in the sampling
+/// config (defense-in-depth against credential leakage on the wire).
+#[tokio::test(flavor = "current_thread")]
+async fn handle_set_session_model_clears_credentials_for_none() {
+    use xai_grok_sampler::AuthScheme;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_dir, am) = auth_manager_with_valid_token("session-token");
+            let (actor, _rx) = make_actor_with_method_and_credentials(
+                Some(am),
+                "cached_token",
+                xai_chat_state::AuthType::SessionToken,
+                "stale-session-jwt".to_string(),
+            )
+            .await;
+
+            let model = actor
+                .chat_state_handle
+                .get_sampling_config()
+                .await
+                .map(|c| c.model)
+                .unwrap_or_default();
+
+            let cfg = xai_grok_sampler::SamplerConfig {
+                api_key: Some("stale-session-jwt".to_string()),
+                base_url: "http://127.0.0.1:11434/v1".to_string(),
+                model,
+                max_completion_tokens: None,
+                temperature: None,
+                top_p: None,
+                api_backend: crate::sampling::ApiBackend::ChatCompletions,
+                auth_scheme: AuthScheme::None,
+                extra_headers: Default::default(),
+                context_window: 256_000,
+                client_version: None,
+                force_http1: false,
+                max_retries: None,
+                stream_tool_calls: false,
+                idle_timeout_secs: None,
+                client_identifier: None,
+                reasoning_effort: None,
+                deployment_id: None,
+                user_id: None,
+                origin_client: None,
+                attribution_callback: None,
+                bearer_resolver: None,
+                supports_backend_search: false,
+                compactions_remaining: None,
+                compaction_at_tokens: None,
+                doom_loop_recovery: None,
+                header_injector: None,
+            };
+            let _ = actor
+                .handle_set_session_model(cfg, false, false, true, 85)
+                .await;
+
+            let creds = actor.chat_state_handle.get_credentials().await;
+            assert!(
+                creds.api_key.is_none(),
+                "AuthScheme::None model switch must clear stale session credentials from chat_state"
+            );
+        })
+        .await;
+}
+
 /// Regression: a model-switch chokepoint must invalidate
 /// the memo even when `model_id` is unchanged. Otherwise a config edit that
 /// turns the current model into a per-model BYOK model on a third-party
