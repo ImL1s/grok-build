@@ -1076,6 +1076,133 @@ fn set_default_model_resolves_known_name() {
     ));
     assert_eq!(app.agents[&agent_id].session.models.current, Some(id));
 }
+fn model_with_readiness_meta(
+    id: &str,
+    name: &str,
+    ready: bool,
+    readiness_reason: &str,
+) -> (acp::ModelId, acp::ModelInfo) {
+    use std::sync::Arc;
+    let id = acp::ModelId::new(Arc::from(id));
+    let mut meta = serde_json::Map::new();
+    meta.insert("ready".into(), serde_json::json!(ready));
+    if !readiness_reason.is_empty() {
+        meta.insert(
+            "readinessReason".into(),
+            serde_json::json!(readiness_reason),
+        );
+    }
+    let info = acp::ModelInfo::new(id.clone(), name.to_string()).meta(Some(meta));
+    (id, info)
+}
+/// Unready catalog entries must not persist a new default or emit
+/// `Effect::SwitchModel` — same reason string as `/model`.
+#[test]
+fn set_default_model_hard_blocks_unready() {
+    use agent_client_protocol as acp;
+    use std::sync::Arc;
+    let mut app = test_app_with_agent();
+    let agent_id = AgentId(0);
+    let reason = "missing OPENAI_API_KEY";
+    let (ready_id, ready_info) = (
+        acp::ModelId::new(Arc::from("grok-4.5")),
+        acp::ModelInfo::new(
+            acp::ModelId::new(Arc::from("grok-4.5")),
+            "Grok 4.5".to_string(),
+        ),
+    );
+    let (unready_id, unready_info) =
+        model_with_readiness_meta("byok", "BYOK", false, reason);
+    {
+        let agent = app.agents.get_mut(&agent_id).unwrap();
+        agent
+            .session
+            .models
+            .available
+            .insert(ready_id.clone(), ready_info);
+        agent
+            .session
+            .models
+            .available
+            .insert(unready_id.clone(), unready_info);
+        agent.session.models.set_current(ready_id.clone(), None);
+    }
+    let effects = dispatch(Action::SetDefaultModel(unready_id.clone()), &mut app);
+    assert!(
+        effects.is_empty(),
+        "unready default-model switch must not emit effects, got {effects:?}",
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::SwitchModel { .. })),
+        "must not emit SwitchModel for unready model",
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::PersistSetting {
+                key: "default_model",
+                ..
+            }
+        )),
+        "must not persist default for unready model",
+    );
+    assert_eq!(
+        app.agents[&agent_id].session.models.current,
+        Some(ready_id),
+        "current model must remain unchanged",
+    );
+    assert_eq!(
+        app.agents[&agent_id]
+            .toast
+            .as_ref()
+            .map(|(m, _)| m.as_str()),
+        Some(reason),
+        "must surface the readiness reason as a toast",
+    );
+}
+/// Auth-class confirm path re-checks readiness before switching.
+#[test]
+fn set_default_model_confirmed_hard_blocks_unready() {
+    use super::super::settings::setters::set_default_model_confirmed;
+    let mut app = test_app_with_agent();
+    let agent_id = AgentId(0);
+    let reason = "missing OPENAI_API_KEY";
+    let (ready_id, ready_info) = model_with_readiness_meta("grok-4.5", "Grok 4.5", true, "");
+    let (unready_id, unready_info) =
+        model_with_readiness_meta("byok", "BYOK", false, reason);
+    {
+        let agent = app.agents.get_mut(&agent_id).unwrap();
+        agent
+            .session
+            .models
+            .available
+            .insert(ready_id.clone(), ready_info);
+        agent
+            .session
+            .models
+            .available
+            .insert(unready_id.clone(), unready_info);
+        agent.session.models.set_current(ready_id.clone(), None);
+    }
+    let effects = set_default_model_confirmed(&mut app, unready_id);
+    assert!(
+        effects.is_empty(),
+        "confirmed path must hard-block unready model, got {effects:?}",
+    );
+    assert_eq!(
+        app.agents[&agent_id].session.models.current,
+        Some(ready_id),
+    );
+    assert_eq!(
+        app.agents[&agent_id]
+            .toast
+            .as_ref()
+            .map(|(m, _)| m.as_str()),
+        Some(reason),
+    );
+}
 /// Re-dispatching the same model
 /// id is idempotent — no PersistSetting, no SwitchModel, no
 /// reasoning_effort reset.

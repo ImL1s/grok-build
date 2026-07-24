@@ -151,7 +151,7 @@ fn parse_model_readiness(
     }
 }
 
-fn model_not_ready_reason(models: &ModelState, id: &acp::ModelId) -> Option<String> {
+pub(crate) fn model_not_ready_reason(models: &ModelState, id: &acp::ModelId) -> Option<String> {
     let info = models.available.get(id)?;
     let readiness = parse_model_readiness(info.meta.as_ref());
     if readiness.ready {

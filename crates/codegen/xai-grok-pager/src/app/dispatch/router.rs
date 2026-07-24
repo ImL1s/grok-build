@@ -884,6 +884,19 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                     .unwrap_or_default();
                 (prev_id, session_id, new_display, prev_class, new_class)
             };
+            if let Some(reason) = app
+                .agents
+                .get(&id)
+                .and_then(|agent| {
+                    crate::slash::commands::model::model_not_ready_reason(
+                        &agent.session.models,
+                        &model_id,
+                    )
+                })
+            {
+                app.show_toast(&reason);
+                return vec![];
+            }
             if prev_id.as_ref() != Some(&model_id)
                 && prev_id.is_some()
                 && !prev_class.is_empty()

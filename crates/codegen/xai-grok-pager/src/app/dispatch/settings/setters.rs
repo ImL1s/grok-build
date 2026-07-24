@@ -1664,6 +1664,20 @@ pub(in crate::app::dispatch) fn set_default_model(
         return vec![];
     }
 
+    if let Some(reason) = app
+        .agents
+        .get(&aid)
+        .and_then(|agent| {
+            crate::slash::commands::model::model_not_ready_reason(
+                &agent.session.models,
+                &new_id,
+            )
+        })
+    {
+        app.show_toast(&reason);
+        return vec![];
+    }
+
     // Idempotent: same model already active → no-op.
     if prev_id.as_ref() == Some(&new_id) {
         return vec![];
@@ -1714,6 +1728,20 @@ pub(in crate::app::dispatch) fn set_default_model_confirmed(
         return vec![];
     }
     if prev_id.as_ref() == Some(&new_id) {
+        return vec![];
+    }
+
+    if let Some(reason) = app
+        .agents
+        .get(&aid)
+        .and_then(|agent| {
+            crate::slash::commands::model::model_not_ready_reason(
+                &agent.session.models,
+                &new_id,
+            )
+        })
+    {
+        app.show_toast(&reason);
         return vec![];
     }
 

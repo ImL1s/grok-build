@@ -970,6 +970,72 @@ fn switch_model_dispatch_produces_effect_and_sets_pending() {
     assert!(app.agents[&id].session.model_switch_pending);
     assert!(app.agents[&id].session.state.is_idle());
 }
+fn model_with_readiness_meta(
+    id: &str,
+    name: &str,
+    ready: bool,
+    readiness_reason: &str,
+) -> (acp::ModelId, acp::ModelInfo) {
+    let id = acp::ModelId::new(std::sync::Arc::from(id));
+    let mut meta = serde_json::Map::new();
+    meta.insert("ready".into(), serde_json::json!(ready));
+    if !readiness_reason.is_empty() {
+        meta.insert(
+            "readinessReason".into(),
+            serde_json::json!(readiness_reason),
+        );
+    }
+    let info = acp::ModelInfo::new(id.clone(), name.to_string()).meta(Some(meta));
+    (id, info)
+}
+/// Direct `Action::SwitchModel` must hard-block unready models with the
+/// same reason string as `/model`.
+#[test]
+fn switch_model_hard_blocks_unready() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let reason = "missing OPENAI_API_KEY";
+    let (ready_id, ready_info) = model_with_readiness_meta("grok-4.5", "Grok 4.5", true, "");
+    let (unready_id, unready_info) =
+        model_with_readiness_meta("byok", "BYOK", false, reason);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent
+            .session
+            .models
+            .available
+            .insert(ready_id.clone(), ready_info);
+        agent
+            .session
+            .models
+            .available
+            .insert(unready_id.clone(), unready_info);
+        agent.session.models.set_current(ready_id, None);
+    }
+    let effects = dispatch(
+        Action::SwitchModel {
+            model_id: unready_id,
+            effort: None,
+        },
+        &mut app,
+    );
+    assert!(
+        effects.is_empty(),
+        "unready SwitchModel must not emit effects, got {effects:?}",
+    );
+    assert!(
+        !app.agents[&id].session.model_switch_pending,
+        "must not set model_switch_pending for blocked switch",
+    );
+    assert_eq!(
+        app.agents[&id]
+            .toast
+            .as_ref()
+            .map(|(m, _)| m.as_str()),
+        Some(reason),
+        "must surface the readiness reason as a toast",
+    );
+}
 #[test]
 fn switch_model_allowed_when_agent_chat_kind() {
     let mut app = test_app_with_agent();
