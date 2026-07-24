@@ -1153,6 +1153,11 @@ async fn handle_set_session_model_clears_credentials_for_none() {
                 creds.api_key.is_none(),
                 "AuthScheme::None model switch must clear stale session credentials from chat_state"
             );
+            assert_eq!(
+                creds.auth_type,
+                xai_chat_state::AuthType::ApiKey,
+                "AuthScheme::None must not leave SessionToken residue in chat_state"
+            );
         })
         .await;
 }

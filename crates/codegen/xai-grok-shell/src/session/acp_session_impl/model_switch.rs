@@ -63,19 +63,25 @@ impl SessionActor {
             .auth_manager
             .as_ref()
             .and_then(|am| am.current_or_expired().map(|a| a.key));
-        let api_key = if sampling_config.auth_scheme == xai_grok_sampler::AuthScheme::None {
-            None
-        } else {
-            sampling_config.api_key.clone()
-        };
+        let (api_key, auth_type) =
+            if sampling_config.auth_scheme == xai_grok_sampler::AuthScheme::None {
+                // Keyless models must not keep a SessionToken auth_type residue
+                // alongside a cleared api_key.
+                (None, xai_chat_state::AuthType::ApiKey)
+            } else {
+                (
+                    sampling_config.api_key.clone(),
+                    crate::agent::config::resolve_chat_state_auth_type(
+                        sampling_config.model.as_str(),
+                        session_key.as_deref(),
+                        existing.auth_type,
+                    ),
+                )
+            };
         self.chat_state_handle
             .update_credentials(xai_chat_state::Credentials {
                 api_key,
-                auth_type: crate::agent::config::resolve_chat_state_auth_type(
-                    sampling_config.model.as_str(),
-                    session_key.as_deref(),
-                    existing.auth_type,
-                ),
+                auth_type,
                 alpha_test_key: existing.alpha_test_key,
                 client_version: sampling_config.client_version.clone(),
             });

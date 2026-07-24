@@ -107,7 +107,17 @@ pub(crate) fn apply_deferred_switch_outcome(
         agent.show_toast(&msg);
         agent.scrollback.push_block(RenderBlock::system(msg));
     }
-    outcome.switch
+    let (model_id, effort) = outcome.switch?;
+    // Re-check at apply time: catalog/meta may have flipped unready between
+    // stash (CLI / pre-session) and session hydrate.
+    if let Some(reason) =
+        crate::slash::commands::model::model_not_ready_reason(&agent.session.models, &model_id)
+    {
+        tracing::warn!("deferred model switch blocked: {reason}");
+        agent.show_toast(&reason);
+        return None;
+    }
+    Some((model_id, effort))
 }
 /// Top-level `/new` dispatcher. If the working directory is inside a
 /// git repository, consults the persisted `new_session_worktree_mode`

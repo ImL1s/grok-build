@@ -2894,6 +2894,45 @@ async fn read_parent_sampling_config_catalog_miss_respects_parent_auth_scheme_no
         "stale chat_state JWT must not survive catalog miss on AuthScheme::None parent"
     );
 }
+#[tokio::test]
+async fn read_parent_sampling_config_available_models_none_strips_with_bearer_parent_baseline() {
+    use xai_grok_sampler::AuthScheme;
+    let inference_slug = "local-none-resolved";
+    let chat_state = spawn_test_parent_chat_state(inference_slug);
+    chat_state.update_credentials(xai_chat_state::Credentials {
+        api_key: Some("stale-session-jwt".to_string()),
+        auth_type: xai_chat_state::AuthType::SessionToken,
+        ..Default::default()
+    });
+    let mut models = indexmap::IndexMap::new();
+    let mut entry = test_model_entry(inference_slug);
+    entry.info.auth_scheme = AuthScheme::None;
+    models.insert("local-none".to_string(), entry);
+    let mut ctx = ctx_with_toggle(HashMap::new());
+    ctx.model_id = acp::ModelId::new("local-none");
+    ctx.parent_chat_state = Some(chat_state);
+    // Parent spawn baseline is still Bearer (agent-level snapshot).
+    ctx.sampling_config.auth_scheme = AuthScheme::Bearer;
+    ctx.sampling_config.api_key = Some("parent-bearer-must-not-win".to_string());
+    ctx.available_models = models.clone();
+    ctx.models_manager = crate::agent::models::ModelsManager::new(
+        None,
+        models,
+        acp::ModelId::new("auto"),
+        ctx.auth_manager.clone(),
+        crate::agent::config::Config::default(),
+    );
+    let (config, _model_id) = read_parent_sampling_config(&ctx).await;
+    assert_eq!(
+        config.auth_scheme,
+        AuthScheme::None,
+        "available_models auth_scheme must win over parent Bearer baseline"
+    );
+    assert!(
+        config.api_key.is_none(),
+        "stale JWT must strip when available_models resolves AuthScheme::None"
+    );
+}
 /// Drive the REAL precedence path
 /// (`resolve_effective_model_config`, which `handle_subagent_request`
 /// calls) with BOTH an explicit `runtime_override_model` AND a

@@ -379,9 +379,12 @@ Expected: Format / Clippy / Tests all success.
 
 ### Done criteria
 
-- [ ] PR #1 closed (not mergeable into `main`)
-- [ ] Subagent inherit strips stale key under None + tests green
-- [ ] Model switch clears chat_state api_key under None + tests green
-- [ ] Dispatch hard-blocks unready for SwitchModel + SetDefaultModel + tests green
-- [ ] Docs badge says `none`
-- [ ] CI on `providers` green including new filters
+- [x] PR #1 closed (not mergeable into `main`)
+- [x] Subagent inherit strips stale key under None + tests green
+- [x] Model switch clears chat_state api_key under None + tests green
+- [x] Dispatch hard-blocks unready for SwitchModel + SetDefaultModel + tests green
+- [x] Docs badge says `none`
+- [x] CI on `providers` green including new filters
+- [x] available_models preferred for subagent auth_scheme; Bearer parent + None catalog strips JWT
+- [x] deferred model switch re-checks readiness on apply
+- [x] AuthScheme::None switch normalizes auth_type away from SessionToken

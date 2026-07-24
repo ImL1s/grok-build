@@ -1078,6 +1078,42 @@ fn auth_class_switch_answered_hard_blocks_unready() {
         "must surface the readiness reason as a toast",
     );
 }
+/// Deferred apply (session hydrate) must re-check readiness before emitting a switch.
+#[test]
+fn apply_deferred_switch_outcome_hard_blocks_unready() {
+    use crate::app::dispatch::session::lifecycle::{
+        DeferredSwitchOutcome, apply_deferred_switch_outcome,
+    };
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let reason = "missing OPENAI_API_KEY";
+    let (unready_id, unready_info) = model_with_readiness_meta("byok", "BYOK", false, reason);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent
+            .session
+            .models
+            .available
+            .insert(unready_id.clone(), unready_info);
+    }
+    let agent = app.agents.get_mut(&id).unwrap();
+    let applied = apply_deferred_switch_outcome(
+        agent,
+        DeferredSwitchOutcome {
+            switch: Some((unready_id, None)),
+            effort_error: None,
+        },
+    );
+    assert!(
+        applied.is_none(),
+        "deferred apply must hard-block unready model"
+    );
+    assert_eq!(
+        agent.toast.as_ref().map(|(m, _)| m.as_str()),
+        Some(reason),
+        "must surface the readiness reason as a toast",
+    );
+}
 #[test]
 fn switch_model_allowed_when_agent_chat_kind() {
     let mut app = test_app_with_agent();
