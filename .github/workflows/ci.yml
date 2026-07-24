@@ -1,0 +1,114 @@
+name: CI
+
+# Product-line CI for the ImL1s fork.
+# `main` stays a pristine upstream mirror (no fork workflows there).
+# Feature / sync PRs target `providers`; pushes to `providers` also run CI.
+
+on:
+  push:
+    branches: [providers]
+  pull_request:
+    branches: [providers]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  lint:
+    name: Clippy (hot path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: clippy
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: providers-lint
+          cache-targets: true
+
+      - name: Clippy sampler / shell / pager
+        env:
+          PROTOC: protoc
+        run: |
+          cargo clippy --manifest-path crates/codegen/xai-grok-sampler/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/codegen/xai-grok-pager/Cargo.toml --all-targets -- -D warnings
+
+  test:
+    name: Tests (providers hot path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: providers-test
+          cache-targets: true
+
+      - name: Sampler auth / wire tests
+        env:
+          PROTOC: protoc
+        run: |
+          cargo test --manifest-path crates/codegen/xai-grok-sampler/Cargo.toml \
+            --test shared_http_wire none_scheme_ -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-sampler/Cargo.toml \
+            none_scheme_ -- --nocapture
+
+      - name: Shell auth + readiness meta
+        env:
+          PROTOC: protoc
+        run: |
+          cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
+            none_auth_scheme -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
+            acp_model_meta_ -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
+            agent::auth_method -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
+            config_model_override_parse -- --nocapture
+
+      - name: Pager model picker / readiness
+        env:
+          PROTOC: protoc
+        run: |
+          cargo test --manifest-path crates/codegen/xai-grok-pager/Cargo.toml --lib \
+            slash::commands::model:: -- --nocapture

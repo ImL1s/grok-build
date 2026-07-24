@@ -68,6 +68,24 @@ v{upstream}+providers.N
 
 Examples: `v0.0.0+providers.1`, or `v1.2.3+providers.1` when upstream publishes a real SemVer. Put the upstream `main` SHA in the release notes. Prefer SemVer **build metadata** (`+providers.N`) over a prerelease suffix (`-providers`), which sorts older than the base version.
 
+## CI / CD
+
+GitHub Actions live only on **`providers`** (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Style matches our other repos: named `CI`, concurrency cancel-in-progress, separate **Format / Clippy / Tests** jobs.
+
+Triggers:
+
+- `push` to `providers`
+- `pull_request` targeting `providers` (feature and `sync/upstream-*` branches)
+- `workflow_dispatch`
+
+Scope is the fork hot path (not full workspace):
+
+- `cargo fmt --all -- --check`
+- `clippy -D warnings` on `xai-grok-sampler`, `xai-grok-shell`, `xai-grok-pager`
+- Targeted auth / readiness / model-picker tests
+
+`main` has no fork workflows — it stays an upstream fast-forward mirror. Do not merge `providers` into `main`.
+
 ## Docs
 
 - Implementation plan: [docs/plans/2026-07-23-multi-provider-local-llm.md](docs/plans/2026-07-23-multi-provider-local-llm.md)
