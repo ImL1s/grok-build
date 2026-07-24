@@ -5286,7 +5286,7 @@ fn provider_hint_for_url(base_url: &str) -> String {
     // cli-chat-proxy for credential refusal, which is not a useful picker label.
     if let Ok(parsed) = reqwest::Url::parse(base_url) {
         match parsed.host() {
-            Some(url::Host::Domain(host)) if host == "localhost" => {
+            Some(url::Host::Domain("localhost")) => {
                 return "local".to_string();
             }
             Some(url::Host::Ipv4(ip)) if ip.is_loopback() => return "local".to_string(),
