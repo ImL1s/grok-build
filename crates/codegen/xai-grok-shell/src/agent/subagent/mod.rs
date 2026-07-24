@@ -962,11 +962,19 @@ async fn read_parent_sampling_config(
                 creds.alpha_test_key.as_deref(),
                 &cfg.base_url,
             );
-            let auth_scheme = crate::agent::config::try_resolve_model_credentials(&cfg.model, None)
+            let mut auth_scheme = crate::agent::config::try_resolve_model_credentials(&cfg.model, None)
                 .map(|r| r.auth_scheme)
-                .unwrap_or_default();
+                .unwrap_or(ctx.sampling_config.auth_scheme);
+            if ctx.sampling_config.auth_scheme == xai_grok_sampler::AuthScheme::None {
+                auth_scheme = xai_grok_sampler::AuthScheme::None;
+            }
+            let api_key = if auth_scheme == xai_grok_sampler::AuthScheme::None {
+                None
+            } else {
+                creds.api_key
+            };
             let inherited = xai_grok_sampler::SamplerConfig {
-                api_key: creds.api_key,
+                api_key,
                 base_url: cfg.base_url,
                 model: cfg.model.clone(),
                 max_completion_tokens: cfg.max_completion_tokens,
@@ -1033,6 +1041,9 @@ async fn read_parent_sampling_config(
         })),
     );
     let mut fallback = ctx.sampling_config.clone();
+    if fallback.auth_scheme == xai_grok_sampler::AuthScheme::None {
+        fallback.api_key = None;
+    }
     fallback.supports_backend_search = ctx
         .models_manager
         .model_supports_backend_search(ctx.model_id.0.as_ref());
