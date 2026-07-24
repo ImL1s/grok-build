@@ -107,6 +107,10 @@ jobs:
             agent::auth_method -- --nocapture
           cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
             config_model_override_parse -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
+            read_parent_sampling_config_ -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-shell/Cargo.toml --lib \
+            handle_set_session_model_clears_credentials_for_none -- --nocapture
 
       - name: Pager model picker / readiness
         env:
@@ -114,3 +118,5 @@ jobs:
         run: |
           cargo test --manifest-path crates/codegen/xai-grok-pager/Cargo.toml --lib \
             slash::commands::model:: -- --nocapture
+          cargo test --manifest-path crates/codegen/xai-grok-pager/Cargo.toml --lib \
+            hard_blocks_unready -- --nocapture
